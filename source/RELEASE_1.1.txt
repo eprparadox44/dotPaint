@@ -1,0 +1,5 @@
+dotPaint 1.1 OFFICIAL RELEASE
+
+기준 시험판: 1.2.40 PREVIEW-SPACE DRAG
+정식판 추가 수정: 중력 모드 마지막 물체 삭제 후 빈 장면 복구, 비동기 미리보기 직렬화, 드래그 상태 초기화.
+플랫폼: Windows x64
