@@ -26,9 +26,7 @@ Windows XP 그림판의 간편한 작업 흐름을 바탕으로, 직접 그리�
 
 ## 스크린샷 / Screenshots
 
-**실제 v1.3.3 화면을 촬영한 후** [`docs/screenshots/`](docs/screenshots/)에 추가할 예정입니다.
-
-아래 표의 파일을 추가한 뒤 이미지 링크를 활성화할 수 있습니다.
+![dotPaint 1.3.3 메인 화면](docs/screenshots/main-light.png)
 
 | 스크린샷 | 파일명 |
 |---|---|
