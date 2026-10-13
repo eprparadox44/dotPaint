@@ -8,7 +8,7 @@ Windows XP 그림판의 간편한 작업 흐름을 바탕으로, 직접 그리�
 [![Build & test](https://github.com/eprparadox44/dotPaint/actions/workflows/build-test.yml/badge.svg)](https://github.com/eprparadox44/dotPaint/actions/workflows/build-test.yml)
 [![License: MIT](https://img.shields.io/badge/code%20license-MIT-blue.svg)](LICENSE)
 
-**[⬇️ 다운로드 / Downloads](https://github.com/eprparadox44/dotPaint/releases/latest)** · **[🌐 소개 웹사이트 / Website](https://eprparadox44.github.io/dotPaint/)** · **[📄 소스 코드 / Source](source/)**
+**[⬇️ 다운로드 / Downloads](https://github.com/eprparadox44/dotPaint/releases/latest)** · **[📝 제작 이야기 / Blog](https://blog.naver.com/jdw1985/224360587153)** · **[📄 소스 코드 / Source](source/)**
 
 > **현재 소스 버전: 1.3.3** · Windows x64 / x86 · Go 1.23 기반 네이티브 응용 프로그램  
 > GitHub Pages는 dotPaint 소개 웹사이트입니다. dotPaint 자체는 Windows에서 실행하는 `.exe`입니다.
