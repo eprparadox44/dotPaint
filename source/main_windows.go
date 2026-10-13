@@ -39,7 +39,7 @@ import (
 // Historical 1.2.38 regression marker retained for inherited source tests:
 // const appVersion = "1.2.38"
 // Release 1.2.39 regression marker: const appVersion = "1.2.40"
-const appVersion = "1.3.2"
+const appVersion = "1.3.3"
 
 // A1250: one summary per Shift hold, never one synchronous log write per repeat.
 var shiftPreviewAutorepeatsIgnored uint64

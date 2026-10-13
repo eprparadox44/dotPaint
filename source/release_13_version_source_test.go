@@ -11,7 +11,7 @@ import (
 // version contract rather than accidentally display an obsolete major label.
 func TestRelease13VersionAndAboutHelpLabels(t *testing.T) {
 	expected := map[string][]string{
-		"main_windows.go": {`const appVersion = "1.3.2"`},
+		"main_windows.go": {`const appVersion = "1.3.3"`},
 		"about_window_windows.go": {
 			`fmt.Sprintf("dotPaint %s", appVersion)`,
 			`fmt.Sprintf("dotPaint %s 정보", appVersion)`,

@@ -58,8 +58,8 @@ func Test147MainRGBFallbackAndLayoutSource(t *testing.T) {
 	}
 	s := string(b)
 	for _, needle := range []string{
-		"for i := 0; i < 48; i++", // preset colours now separate
-		"for i := 0; i < 44; i++", // 28 + 16 in document palette
+		"for i := 0; i < 48; i++",                   // preset colours now separate
+		"for i := 0; i < s.displayCountFor(0); i++", // dynamic visible main-palette slots (1.3.2+)
 		"customPickerMainSlotAt(x, y)",
 		"s.commitEditedSwatch()",    // edits apply only selected slot
 		"case a.indexedMode:",       // cache RGB palette for restored documents

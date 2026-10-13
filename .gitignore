@@ -1,0 +1,20 @@
+# Compiled files are distributed through GitHub Releases, not Git history.
+*.exe
+*.exe~
+*.test
+*.out
+*.log
+*.tmp
+*.bak
+*.zip
+
+# Local build and IDE byproducts
+dist/
+bin/
+build/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Do not ignore source/assets, docs/screenshots, or source/*.bat

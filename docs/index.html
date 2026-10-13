@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="author" content="지너드, G.nerd (eprparadox44)">
+  <meta name="description" content="dotPaint - Windows 그림판 스타일의 정밀 그래픽 편집 프로그램">
+  <title>dotPaint — Windows 그래픽 편집기</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0d1423;--surface:#172236;--fg:#eef5ff;--muted:#a8b9d3;--blue:#75b7ff;--line:#34445d}
+    *{box-sizing:border-box}body{margin:0;background:linear-gradient(145deg,#0d1423,#182c42);color:var(--fg);font:16px/1.65 system-ui,"Malgun Gothic",sans-serif;min-height:100vh}
+    .wrap{width:min(1100px,calc(100% - 36px));margin:auto}
+    header{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:28px 0;border-bottom:1px solid var(--line)}
+    .logo{font-size:24px;font-weight:750;letter-spacing:-.7px}.links{display:flex;gap:20px;flex-wrap:wrap}
+    a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}.links a{color:var(--muted)}
+    .hero{padding:95px 0 70px;max-width:810px}.eyebrow{font-weight:700;color:var(--blue);letter-spacing:.15em;text-transform:uppercase;font-size:13px}
+    h1{font-size:clamp(36px,6vw,68px);line-height:1.13;letter-spacing:-2px;margin:16px 0 24px}h2{font-size:27px;margin:0 0 20px}
+    p{color:var(--muted);margin:0 0 20px}.buttons{display:flex;flex-wrap:wrap;gap:12px;margin-top:34px}
+    .btn{padding:12px 19px;border-radius:12px;border:1px solid var(--line);font-weight:750;color:var(--fg);background:#21344f}
+    .btn.primary{background:#6ba9f0;color:#061426;border-color:#6ba9f0}
+    .section{padding:28px 0 56px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:15px}
+    .card{border:1px solid var(--line);background:var(--surface);border-radius:18px;padding:23px}
+    .card strong{display:block;font-size:19px;margin-bottom:10px}.card p{margin:0;font-size:14px}
+    .note{margin:24px 0;padding:22px;border:1px solid var(--line);border-radius:15px;color:var(--muted);background:#111b2b}
+    footer{padding:32px 0;border-top:1px solid var(--line);color:var(--muted);font-size:14px}
+  </style>
+</head>
+<body>
+ <div class="wrap">
+  <header><div class="logo">🎨 dotPaint</div><nav class="links" aria-label="주요 링크"><a href="https://github.com/eprparadox44/dotPaint">GitHub</a><a href="https://github.com/eprparadox44/dotPaint/releases">Releases</a><a href="https://github.com/eprparadox44/dotPaint/blob/main/README.md">README</a></nav></header>
+  <main>
+   <section class="hero"><div class="eyebrow">Windows desktop graphics editor · v1.3.3</div><h1>가볍게 그리고,<br>정확하게 표현하다.</h1><p>XP 그림판의 간결함에 수식, 도형, 인덱스 팔레트와 물리 시각화 도구를 더한 Windows용 독립 그래픽 편집기입니다.</p><div class="buttons"><a class="btn primary" href="https://github.com/eprparadox44/dotPaint/releases/latest">↓ 최신 버전 다운로드</a><a class="btn" href="https://github.com/eprparadox44/dotPaint">소스 코드 보기</a></div></section>
+   <section class="section"><h2>주요 기능</h2><div class="cards"><article class="card"><strong>✏️ 그림판 기본 도구</strong><p>브러시, 선, 도형, 선택, 채우기, 실행 취소와 편집.</p></article><article class="card"><strong>🎨 색상·팔레트</strong><p>RGB 색 편집 및 16색·256색 인덱스 팔레트.</p></article><article class="card"><strong>∑ 수학·기하</strong><p>수식과 함수 그래프, 3D/4D 도형 시각화.</p></article><article class="card"><strong>⚡ 물리 시각화</strong><p>전기장, 자기장, 중력장 등을 정밀하게 그리는 도구.</p></article><article class="card"><strong>📐 정밀 크기 변경</strong><p>백분율↔픽셀 자동 연동, 소수 입력, 결과 크기 미리보기.</p></article><article class="card"><strong>🌗 라이트·다크</strong><p>다양한 작업 환경을 위한 테마 지원.</p></article></div></section>
+   <section class="section"><h2>프로그램 스크린샷</h2><div class="note">v1.3.3 실제 실행 화면을 준비 중입니다. 캡처는 GitHub의 <a href="https://github.com/eprparadox44/dotPaint/tree/main/docs/screenshots">docs/screenshots</a>에 추가됩니다. (현재 이미지를 임의로 생성하거나 다른 버전 화면을 대신 사용하지 않았습니다.)</div></section>
+   <section class="section"><h2>다운로드 안내</h2><p>Windows 64비트(x64), 32비트(x86) 실행파일과 통합 ZIP은 GitHub Releases의 Assets에 있습니다. Windows용 네이티브 프로그램으로, 이 웹페이지에서 직접 실행되지는 않습니다.</p><div class="buttons"><a class="btn primary" href="https://github.com/eprparadox44/dotPaint/releases/latest">Releases에서 다운로드</a></div></section>
+  </main>
+  <footer>© 2026 지너드, G.nerd (eprparadox44) · Code available under the <a href="https://github.com/eprparadox44/dotPaint/blob/main/LICENSE">MIT License</a>, subject to third-party asset notices. Unofficial, independent Windows Paint-inspired project.</footer>
+ </div>
+</body>
+</html>

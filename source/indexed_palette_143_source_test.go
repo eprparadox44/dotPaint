@@ -13,7 +13,7 @@ func Test143IndexedPaletteDockResizeAndDialogWiring(t *testing.T) {
 	}
 	s := string(data)
 	for _, marker := range []string{
-		`const appVersion = "1.3.2"`,
+		`const appVersion = "1.3.3"`,
 		`x = toolboxWidth`,
 		`return defWindowProc(hwnd, msg, wparam, lparam)`,
 		`func (a *App) paletteColorArea`,
