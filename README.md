@@ -24,22 +24,30 @@ Windows XP 그림판의 간편한 작업 흐름을 바탕으로, 직접 그리�
 - 라이트·다크 테마, 클립보드 및 실행 취소·다시 실행
 - 늘이기·기울이기: 백분율/픽셀 양방향 입력, 소수 셋째 자리, 변경 후 크기 미리보기 (v1.3.3)
 
+
 ## 스크린샷 / Screenshots
 
-![dotPaint 1.3.3 메인 화면](docs/screenshots/main-light.png)
+### 메인 화면 — 라이트 모드
+![dotPaint 라이트 모드](docs/screenshots/main-light.png)
 
-| 스크린샷 | 파일명 |
-|---|---|
-| 메인 화면 (라이트) | `docs/screenshots/main-light.png` |
-| 메인 화면 (다크) | `docs/screenshots/main-dark.png` |
-| 늘이기·기울이기 | `docs/screenshots/stretch-skew.png` |
-| 장 시각화 | `docs/screenshots/field-visualization.png` |
-| 3D / 4D 도형 | `docs/screenshots/shapes-3d-4d.png` |
-
-<!-- 실제 스크린샷 업로드 후, 아래와 같이 원하는 줄을 활성화하세요.
+### 메인 화면 — 다크 모드
 ![dotPaint 다크 모드](docs/screenshots/main-dark.png)
-![늘이기 및 기울이기](docs/screenshots/stretch-skew.png)
--->
+
+### 대칭 이동 및 자유각 회전
+![대칭 이동 및 회전](docs/screenshots/flip-rotate.png)
+
+### 수식 편집기
+![수식 편집기](docs/screenshots/math.png)
+
+### 함수 및 그래프 편집기
+![함수 그래프](docs/screenshots/function.png)
+
+### 3D·4D 도형 그리기
+![다차원 도형](docs/screenshots/shapes-3d-4d.png)
+
+### 전기장·자기장·중력장 시각화
+![물리장 시각화](docs/screenshots/field.png)
+
 
 ## 설치 및 실행 / Download & run
 
