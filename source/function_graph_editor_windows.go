@@ -223,7 +223,7 @@ func graphEditorCreateControls(s *functionGraphEditorState) {
 
 	s.axisAddBtn = graphCreateChild(s, "BUTTON", "축 넣기", WS_TABSTOP, graphIDAxisAdd)
 	s.axisRemoveBtn = graphCreateChild(s, "BUTTON", "축 빼기", WS_TABSTOP, graphIDAxisRemove)
-	s.axisLabel = graphCreateChild(s, "STATIC", "축: 표시", 0, 0)
+	s.axisLabel = graphCreateChild(s, "STATIC", "축: 표시", 0x0000000C, 0)
 	s.angleLabel = graphCreateChild(s, "STATIC", "각도", 0, 0)
 	s.angleCombo = graphCreateChild(s, "COMBOBOX", "", WS_TABSTOP|CBS_DROPDOWNLIST|CBS_HASSTRINGS|CBS_NOINTEGRALHEIGHT, graphIDAngle)
 	sendMessage(s.angleCombo, CB_ADDSTRING, 0, uintptr(unsafe.Pointer(utf16Ptr("라디안"))))
@@ -327,11 +327,11 @@ func graphEditorLayoutControls(s *functionGraphEditorState, client RECT) {
 	rowY := 76
 	procMoveWindow.Call(s.axisAddBtn, 10, uintptr(rowY), 68, 26, 1)
 	procMoveWindow.Call(s.axisRemoveBtn, 82, uintptr(rowY), 68, 26, 1)
-	procMoveWindow.Call(s.axisLabel, 155, uintptr(rowY+5), 58, 20, 1)
-	procMoveWindow.Call(s.angleLabel, 218, uintptr(rowY+5), 32, 20, 1)
-	procMoveWindow.Call(s.angleCombo, 252, uintptr(rowY), 78, 160, 1)
+	procMoveWindow.Call(s.axisLabel, 155, uintptr(rowY+5), 86, 20, 1)
+	procMoveWindow.Call(s.angleLabel, 246, uintptr(rowY+5), 32, 20, 1)
+	procMoveWindow.Call(s.angleCombo, 280, uintptr(rowY), 78, 160, 1)
 
-	rx := 342
+	rx := 370
 	labelW, editW, gap := 42, 58, 8
 	labels := []uintptr{s.xMinLabel, s.xMaxLabel, s.yMinLabel, s.yMaxLabel}
 	edits := []uintptr{s.xMinEdit, s.xMaxEdit, s.yMinEdit, s.yMaxEdit}
