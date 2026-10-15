@@ -49,7 +49,8 @@ func TestBlackHoleSpinControlLimitedToCurvatureGrid(t *testing.T) {
 	for _, marker := range []string{
 		"curvatureControls := multidimEditorBlackHoleMode(s) == mdBlackHoleModeCurvatureGrid",
 		"multidimEditorSetDimensionEnabled(s.heightLabel, s.heightSlider, s.heightValueLabel, curvatureControls)",
-		"실제 블랙홀 그림에서는 비활성",
+		"multidimSetText(s.widthValueLabel, \"사용 안 함\")",
+		"multidimSetText(s.heightValueLabel, \"고정\")",
 	} {
 		if !strings.Contains(editorSrc, marker) {
 			t.Fatalf("missing black-hole slider disable marker %q", marker)
