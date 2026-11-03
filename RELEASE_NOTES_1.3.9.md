@@ -21,7 +21,7 @@ No installer is required. The public release contains **only these two standard 
 
 ## Testing note
 
-Automated source tests and Windows cross-builds verify the code and build. **Fast typing, Korean IME, Space/Enter order, and Home/End under real Windows interaction must still be confirmed on a Windows PC before publishing this as a stable release.**
+Automated source tests and Windows cross-builds verify the code and build. **Automated Go tests, static analysis, Windows cross-builds, and standard executable size checks have passed. Real Windows interaction (fast typing, Korean IME, Space/Enter order, and Home/End) has not yet been independently verified. Please report any remaining input issues.**
 
 ## Project
 
