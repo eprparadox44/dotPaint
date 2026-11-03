@@ -9,7 +9,7 @@ import (
 // Ensures that About and Help derive their user-visible version from the
 // same release identifier. A future release must deliberately update the
 // version contract rather than accidentally display an obsolete major label.
-func TestRelease13VersionAndAboutHelpLabels(t *testing.T) {
+func TestRelease139VersionAndAboutHelpLabels(t *testing.T) {
 	expected := map[string][]string{
 		"main_windows.go": {`const appVersion = "1.3.9"`},
 		"about_window_windows.go": {
