@@ -7,11 +7,11 @@
 [![Build & test](https://github.com/eprparadox44/dotPaint/actions/workflows/build-test.yml/badge.svg)](https://github.com/eprparadox44/dotPaint/actions/workflows/build-test.yml)
 [![License: MIT](https://img.shields.io/badge/code%20license-MIT-blue.svg)](LICENSE)
 
-**[English](#english) · [한국어](#한국어) · [Screenshots / 스크린샷](#screenshots--스크린샷)**
+**[English](#english) · [한국어](#한국어) · [Screenshots / 스크린샷](#screenshots--스크린샷) · [License / 라이선스](#license--라이선스)**
 
 **[⬇️ Download / 다운로드](https://github.com/eprparadox44/dotPaint/releases/latest)** · **[📝 Development blog / 제작 이야기](https://blog.naver.com/jdw1985/224360587153)** · **[📄 Source / 소스 코드](source/)**
 
-> **Development source / 개발 소스: 1.3.9 (Windows GUI test pending / 실기 검증 대기)** · **Latest stable release / 최신 정식판: 1.3.7** · Windows x64 / x86 · Go 1.23+
+> **Latest version / 최신 버전: 1.3.9** · Windows x64 / x86 · Bilingual (한국어 / English) · Go 1.23+
 
 ---
 
@@ -33,17 +33,17 @@ dotPaint is a native Windows graphics editor inspired by the straightforward wor
 - Light and dark themes
 - **Korean and English in the same executable**, with instant interface-language switching and a saved language preference
 
-### What's new in the 1.3.9 source candidate
+### What's new in 1.3.9
 
-- Reduced synchronous text-layout work during typing to improve responsiveness for Space, Enter, and fast input
-- Home/End and Shift selections use the text editor's visual line boundaries; Ctrl+Home/End remain document-wide
-- 20× magnifier and automatic skip of target-area selection when the full enlarged image fits the workspace
-- Korean/English instant language switching, multidimensional drawing, graphing, and physics tools remain available
+- **Text input responsiveness:** Heavy text formatting and layout work is deferred and grouped instead of repeated synchronously for every keystroke, reducing potential lag during fast typing with Space and Enter
+- **Caret navigation:** Home/End and Shift+Home/End use visible text-line boundaries; Ctrl+Home/End navigate to the start/end of the document
+- **Magnifier:** 20× zoom; skips the dashed area-selection step automatically when the entire enlarged image fits the available workspace
+- **Continuity:** Instant Korean/English language switching and the existing drawing, mathematics, geometry, and physics tools remain available
 
 ### Download and run
 
 1. Open the [latest GitHub release](https://github.com/eprparadox44/dotPaint/releases/latest).
-2. For the latest published stable release (currently 1.3.7), download **`dotPaint_1.3.7_x64.exe`** for 64-bit Windows or **`dotPaint_1.3.7_x86.exe`** for 32-bit Windows. The 1.3.9 executables are pending Windows GUI acceptance testing.
+2. Download **`dotPaint_1.3.9_x64.exe`** for 64-bit Windows, or **`dotPaint_1.3.9_x86.exe`** for 32-bit Windows.
 3. Run the downloaded executable. No installer is required.
 
 Use **View → Language** to choose **English** or **한국어**. Changing the language does not require restarting dotPaint.
@@ -60,7 +60,7 @@ go vet ./...
 
 To build the application, run **`build_1.3.9.bat`** from the repository root on Windows, or **`./build_1.3.9.sh`** in a compatible Bash build environment. Both scripts use the source in `source/`.
 
-> Automated checks verify tests and builds; they do not replace hands-on Windows GUI testing. In particular, the 1.3.9 typing and caret improvements require real Windows confirmation before public release.
+> Automated Go tests, static analysis, Windows cross-builds, and executable-size checks have passed. Real Windows GUI typing/IME/Home/End behavior has **not yet been independently confirmed**; please report any remaining input issues.
 
 ---
 
@@ -82,17 +82,17 @@ dotPaint는 Windows XP 그림판의 간편한 작업 흐름을 바탕으로 만�
 - 라이트·다크 테마
 - **하나의 실행파일에서 한국어·영어 즉시 전환**, 언어 설정 저장
 
-### 1.3.9 개발 소스의 주요 변경 사항
+### 1.3.9 주요 변경 사항
 
-- 빠른 입력 중 스페이스·엔터 지연 감소를 위해 텍스트 배치 작업을 입력 처리와 분리
-- Home·End와 Shift 선택 범위를 실제 표시 줄 기준으로 개선, Ctrl+Home·End는 문서 전체 기준 유지
-- 20배 확대 및 확대 이미지가 작업 화면에 모두 들어오는 경우 영역 선택 생략
-- 한국어·영어 즉시 전환, 다차원 도형, 그래프, 물리장 등 기존 기능 보존
+- **텍스트 입력 반응성 개선:** 빠른 타이핑에서 스페이스·엔터 반응이 밀리지 않도록 무거운 글자 배치·서식 갱신을 입력 처리와 분리하고 묶어서 처리
+- **커서 이동 개선:** Home·End와 Shift+Home·End를 실제 화면 표시 줄 기준으로 처리하며, Ctrl+Home·End는 문서 처음·끝으로 이동
+- **확대 기능:** 최대 20배 확대, 확대된 그림 전체가 작업 화면에 들어오면 점선 영역 선택 단계 자동 생략
+- **기존 기능 유지:** 한국어·영어 즉시 전환, 기본 그리기, 수식, 그래프, 3D·4D 도형, 물리장 시각화 등
 
 ### 다운로드 및 실행
 
 1. [최신 GitHub 릴리즈](https://github.com/eprparadox44/dotPaint/releases/latest)를 엽니다.
-2. 현재 공개된 최신 정식 버전(1.3.7)은 **64비트 Windows**에서 **`dotPaint_1.3.7_x64.exe`**, **32비트 Windows**에서 **`dotPaint_1.3.7_x86.exe`**를 다운로드합니다. 1.3.9 실행파일은 Windows 실기 검증을 마친 뒤 공개할 예정입니다.
+2. **64비트 Windows**는 **`dotPaint_1.3.9_x64.exe`**, **32비트 Windows**는 **`dotPaint_1.3.9_x86.exe`**를 다운로드합니다.
 3. 다운로드한 실행파일을 실행합니다. 별도의 설치 과정은 필요하지 않습니다.
 
 **보기 → 언어**에서 **한국어** 또는 **English**를 선택할 수 있으며, 프로그램을 다시 실행할 필요가 없습니다.
@@ -109,7 +109,7 @@ go vet ./...
 
 Windows에서는 저장소 최상위의 **`build_1.3.9.bat`**, 호환되는 Bash 빌드 환경에서는 **`./build_1.3.9.sh`**를 사용합니다. 두 스크립트 모두 `source/`의 소스를 이용합니다.
 
-> 자동 검증은 코드 검사와 빌드를 수행하며, 실제 Windows GUI 조작 검증을 완전히 대신하지는 않습니다. 특히 1.3.9의 타이핑·커서 개선은 정식 배포 전에 Windows 실기 확인이 필요합니다.
+> Go 전체 테스트·정적 검사·Windows 교차 빌드·실행파일 용량 검사를 통과했습니다. 다만 실제 Windows에서의 빠른 타이핑·한글 IME·Home·End 조작은 **아직 별도로 확인되지 않았으므로**, 입력 문제가 남아 있다면 제보해 주세요.
 
 ---
 
