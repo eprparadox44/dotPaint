@@ -11,7 +11,7 @@
 
 **[⬇️ Download / 다운로드](https://github.com/eprparadox44/dotPaint/releases/latest)** · **[📝 Development blog / 제작 이야기](https://blog.naver.com/jdw1985/224360587153)** · **[📄 Source / 소스 코드](source/)**
 
-> **Current version / 현재 버전: 1.3.7** · Windows x64 / x86 · Go 1.23+
+> **Development source / 개발 소스: 1.3.9 (Windows GUI test pending / 실기 검증 대기)** · **Latest stable release / 최신 정식판: 1.3.7** · Windows x64 / x86 · Go 1.23+
 
 ---
 
@@ -33,17 +33,17 @@ dotPaint is a native Windows graphics editor inspired by the straightforward wor
 - Light and dark themes
 - **Korean and English in the same executable**, with instant interface-language switching and a saved language preference
 
-### What's new in 1.3.7
+### What's new in the 1.3.9 source candidate
 
-- Korean/English interface switching without restarting the application
-- Refined English labels and control layouts
-- A cleaner multidimensional shape editor with larger previews and no lengthy explanation panels
-- Preserved existing drawing, equation, graph, and physics tools
+- Reduced synchronous text-layout work during typing to improve responsiveness for Space, Enter, and fast input
+- Home/End and Shift selections use the text editor's visual line boundaries; Ctrl+Home/End remain document-wide
+- 20× magnifier and automatic skip of target-area selection when the full enlarged image fits the workspace
+- Korean/English instant language switching, multidimensional drawing, graphing, and physics tools remain available
 
 ### Download and run
 
 1. Open the [latest GitHub release](https://github.com/eprparadox44/dotPaint/releases/latest).
-2. Download **`dotPaint_1.3.7_x64.exe`** for 64-bit Windows or **`dotPaint_1.3.7_x86.exe`** for 32-bit Windows.
+2. For the latest published stable release (currently 1.3.7), download **`dotPaint_1.3.7_x64.exe`** for 64-bit Windows or **`dotPaint_1.3.7_x86.exe`** for 32-bit Windows. The 1.3.9 executables are pending Windows GUI acceptance testing.
 3. Run the downloaded executable. No installer is required.
 
 Use **View → Language** to choose **English** or **한국어**. Changing the language does not require restarting dotPaint.
@@ -58,9 +58,9 @@ go test ./...
 go vet ./...
 ```
 
-To build the application, run **`build_1.3.7.bat`** from the repository root on Windows, or **`./build_1.3.7.sh`** in a compatible Bash build environment. Both scripts use the source in `source/`.
+To build the application, run **`build_1.3.9.bat`** from the repository root on Windows, or **`./build_1.3.9.sh`** in a compatible Bash build environment. Both scripts use the source in `source/`.
 
-> Automated checks verify tests and builds; they do not replace hands-on Windows GUI testing.
+> Automated checks verify tests and builds; they do not replace hands-on Windows GUI testing. In particular, the 1.3.9 typing and caret improvements require real Windows confirmation before public release.
 
 ---
 
@@ -82,17 +82,17 @@ dotPaint는 Windows XP 그림판의 간편한 작업 흐름을 바탕으로 만�
 - 라이트·다크 테마
 - **하나의 실행파일에서 한국어·영어 즉시 전환**, 언어 설정 저장
 
-### 1.3.7 주요 변경 사항
+### 1.3.9 개발 소스의 주요 변경 사항
 
-- 프로그램 재시작 없이 한국어와 영어 인터페이스 전환
-- 영어 UI 문구와 입력창 배치 개선
-- 다차원 도형 편집기의 긴 설명창 제거 및 미리보기 영역 확대
-- 기존 그림, 수식, 그래프, 물리 시각화 기능 유지
+- 빠른 입력 중 스페이스·엔터 지연 감소를 위해 텍스트 배치 작업을 입력 처리와 분리
+- Home·End와 Shift 선택 범위를 실제 표시 줄 기준으로 개선, Ctrl+Home·End는 문서 전체 기준 유지
+- 20배 확대 및 확대 이미지가 작업 화면에 모두 들어오는 경우 영역 선택 생략
+- 한국어·영어 즉시 전환, 다차원 도형, 그래프, 물리장 등 기존 기능 보존
 
 ### 다운로드 및 실행
 
 1. [최신 GitHub 릴리즈](https://github.com/eprparadox44/dotPaint/releases/latest)를 엽니다.
-2. **64비트 Windows**는 **`dotPaint_1.3.7_x64.exe`**, **32비트 Windows**는 **`dotPaint_1.3.7_x86.exe`**를 다운로드합니다.
+2. 현재 공개된 최신 정식 버전(1.3.7)은 **64비트 Windows**에서 **`dotPaint_1.3.7_x64.exe`**, **32비트 Windows**에서 **`dotPaint_1.3.7_x86.exe`**를 다운로드합니다. 1.3.9 실행파일은 Windows 실기 검증을 마친 뒤 공개할 예정입니다.
 3. 다운로드한 실행파일을 실행합니다. 별도의 설치 과정은 필요하지 않습니다.
 
 **보기 → 언어**에서 **한국어** 또는 **English**를 선택할 수 있으며, 프로그램을 다시 실행할 필요가 없습니다.
@@ -107,9 +107,9 @@ go test ./...
 go vet ./...
 ```
 
-Windows에서는 저장소 최상위의 **`build_1.3.7.bat`**, 호환되는 Bash 빌드 환경에서는 **`./build_1.3.7.sh`**를 사용합니다. 두 스크립트 모두 `source/`의 소스를 이용합니다.
+Windows에서는 저장소 최상위의 **`build_1.3.9.bat`**, 호환되는 Bash 빌드 환경에서는 **`./build_1.3.9.sh`**를 사용합니다. 두 스크립트 모두 `source/`의 소스를 이용합니다.
 
-> 자동 검증은 코드 검사와 빌드를 수행하며, 실제 Windows GUI 조작 검증을 완전히 대신하지는 않습니다.
+> 자동 검증은 코드 검사와 빌드를 수행하며, 실제 Windows GUI 조작 검증을 완전히 대신하지는 않습니다. 특히 1.3.9의 타이핑·커서 개선은 정식 배포 전에 Windows 실기 확인이 필요합니다.
 
 ---
 
@@ -144,8 +144,8 @@ Windows에서는 저장소 최상위의 **`build_1.3.7.bat`**, 호환되는 Bash
 source/                 Go source code and static assets / Go 소스 및 정적 에셋
 .github/workflows/      CI checks and builds / 자동 테스트 및 빌드
 docs/                   Documentation and screenshots / 문서 및 스크린샷
-build_1.3.7.bat         Windows build script / Windows 빌드 스크립트
-build_1.3.7.sh          Bash build script / Bash 빌드 스크립트
+build_1.3.9.bat         Windows build script / Windows 빌드 스크립트
+build_1.3.9.sh          Bash build script / Bash 빌드 스크립트
 CHANGELOG.md            Version history / 변경 이력
 LICENSE                 MIT license for original code / 자체 코드 MIT 라이선스
 THIRD_PARTY_NOTICES.md  Third-party materials / 제3자 자료 관련 안내

@@ -39,7 +39,7 @@ import (
 // Historical 1.2.38 regression marker retained for inherited source tests:
 // const appVersion = "1.2.38"
 // Release 1.2.39 regression marker: const appVersion = "1.2.40"
-const appVersion = "1.3.7"
+const appVersion = "1.3.9"
 
 // A1250: one summary per Shift hold, never one synchronous log write per repeat.
 var shiftPreviewAutorepeatsIgnored uint64
@@ -2611,16 +2611,6 @@ type TextCharStyle struct {
 	Underline bool
 }
 
-// TextBoundaryPos is the native-canvas position of one UTF-16 insertion
-// boundary.  Cursor hit testing, selection painting, and the visible caret all
-// use this same cache, so the highlighted range can never drift away from the
-// range that receives formatting.
-type TextBoundaryPos struct {
-	Index int
-	X     int
-	Y     int
-}
-
 // TextGlyphCluster is one visual glyph cluster as rasterized by the native GDI
 // text layout. Selection highlighting uses these exact advance rectangles rather
 // than rebuilding rectangles one UTF-16 code unit at a time. This prevents the
@@ -2715,6 +2705,9 @@ type TextState struct {
 	IMEPendingShrink       bool
 	IMEPendingCandidate    int
 	IMEPendingChangeUnixMS int64
+	// Coalesce expensive Rich Edit formatting/preview after input has been
+	// accepted by the real EDIT.  Never block EN_CHANGE on full text layout.
+	PreviewTimerPending bool
 
 	ControlSync       bool
 	LastSizeListIndex int
@@ -3024,7 +3017,7 @@ func newApp() *App {
 		canvas:      NewCanvas(640, 480, rgb(255, 255, 255)),
 		undo:        NewUndoManager(20),
 		zoom:        initialCanvasZoom,
-		zoomLevels:  []int{1, 2, 4, 6, 8, 12, 15},
+		zoomLevels:  []int{1, 2, 4, 6, 8, 12, 15, 20},
 		zoomTarget:  8,
 		showToolbox: true, showPalette: true, showStatus: true, showClipboard: true, showHistory: true, opaque: false,
 		tool:                 ToolPencil,
@@ -4138,9 +4131,10 @@ func (a *App) endTextIMEComposition() {
 	}
 	logf("TEXT IME end units=%d selection=%d..%d", utf16UnitLen(a.textTool.Text), start, end)
 	a.clearTextIMEState("composition ended")
-	a.syncTextLayoutControl()
-	a.resetTextCaretBlink()
-	a.requestTextRepaint(false)
+	// The input control already owns the committed characters and selection.
+	// Rebuilding Rich Edit here can delay the very next Space/Enter/IME key.
+	a.scheduleTextInputRepaint()
+	a.textTool.CaretVisible = true
 }
 
 func (a *App) displayTextCaretIndex() int {
@@ -5075,13 +5069,11 @@ func (a *App) endTextRangeSelection(mx, my int) {
 	a.requestTextRepaint(true)
 }
 
-// isTextNativeNavigationKey identifies keys that the hidden plain EDIT can
-// handle correctly by character boundary. Up/Down are handled separately from
-// the visible Rich Edit layout because the input EDIT itself is intentionally
-// only one device pixel large.
+// Only Left/Right can use the native EDIT's character boundaries. Home/End
+// and Up/Down use the GDI visual layout because the input EDIT is 1px high.
 func isTextNativeNavigationKey(vk int) bool {
 	switch vk {
-	case VK_LEFT, VK_RIGHT, VK_HOME, VK_END:
+	case VK_LEFT, VK_RIGHT:
 		return true
 	}
 	return false
@@ -5116,6 +5108,55 @@ func (a *App) afterTextSelectionNavigation(beforeStart, beforeEnd int, reason st
 	a.requestTextRepaint(false)
 	a.requestStatusRepaint()
 	logf("TEXT keyboard navigation reason=%q before=%d..%d after=%d..%d", reason, beforeStart, beforeEnd, start, end)
+}
+
+// moveTextCaretLineEdge uses the same GDI boundaries as the visible caret.
+// The 1-pixel hidden input EDIT has different wrapping and must not process
+// native Home/End. Ctrl+Home/End still refers to the entire document.
+func (a *App) moveTextCaretLineEdge(vk int, extend, documentEdge bool) {
+	if !a.textTool.Active || !a.textTool.Editing || a.textTool.EditHwnd == 0 {
+		return
+	}
+	beforeStart, beforeEnd := a.textSelection()
+	start, end := beforeStart, beforeEnd
+	if start > end {
+		start, end = end, start
+	}
+	anchor, caret := start, end
+	if start == end {
+		anchor, caret = start, start
+	} else if a.textTool.SelectAnchor == end {
+		anchor, caret = end, start
+	} else if a.textTool.SelectAnchor == start {
+		anchor, caret = start, end
+	} else if vk == VK_HOME {
+		anchor, caret = end, start
+	}
+	if !extend && start != end {
+		if vk == VK_HOME {
+			caret = start
+		} else {
+			caret = end
+		}
+		anchor = caret
+	}
+	toEnd := vk == VK_END
+	target := 0
+	if documentEdge {
+		if toEnd {
+			target = utf16UnitLen(a.textTool.Text)
+		}
+	} else {
+		target = textVisualLineEdge(a.textBoundaryPositions(), caret, toEnd)
+	}
+	if extend {
+		sendMessage(a.textTool.EditHwnd, EM_SETSEL, uintptr(anchor), uintptr(target))
+		a.textTool.SelectAnchor = anchor
+	} else {
+		sendMessage(a.textTool.EditHwnd, EM_SETSEL, uintptr(target), uintptr(target))
+		a.textTool.SelectAnchor = target
+	}
+	a.afterTextSelectionNavigation(beforeStart, beforeEnd, "visual line Home/End", false)
 }
 
 func (a *App) moveTextCaretVertical(vk int, extend bool) {
@@ -5301,6 +5342,10 @@ func (a *App) handleTextEditKeyDown(vk int) bool {
 			a.pasteTextAtSelection()
 			return true
 		}
+	}
+	if vk == VK_HOME || vk == VK_END {
+		a.moveTextCaretLineEdge(vk, shift, ctrl)
+		return true
 	}
 	if vk == VK_UP || vk == VK_DOWN {
 		a.moveTextCaretVertical(vk, shift)
@@ -5781,6 +5826,7 @@ func (a *App) finishTextEditing(commit bool) {
 	}
 	a.stopTextCaretBlink()
 	procKillTimer.Call(a.hwnd, textPreviewTimerID)
+	a.textTool.PreviewTimerPending = false
 	a.textTool.Active = false
 	a.textTool.Editing = false
 	a.textTool.Creating = false
@@ -5896,13 +5942,17 @@ func (a *App) handleTextControlCommand(id, code int) bool {
 	case ID_TEXT_EDITBOX:
 		if code == EN_CHANGE && a.textTool.Active {
 			a.syncTextModelFromInput()
-			a.syncTextLayoutControl()
+			// Only update the lightweight UTF-16/style model synchronously.
+			// Rich Edit formatting belongs to the coalesced preview timer.
 			a.textTool.CaretVisible = true
 			if !a.textTool.CaretTimer {
 				procSetTimer.Call(a.hwnd, textCaretTimerID, 530, 0)
 				a.textTool.CaretTimer = true
 			}
 			a.scheduleTextInputRepaint()
+			// No layout/toolbar/window geometry updates in the synchronous
+			// EN_CHANGE callback: queue later expensive work instead.
+			return true
 		}
 	case ID_TEXT_FONTCOMBO:
 		if code == CBN_SELCHANGE {
@@ -7887,16 +7937,21 @@ func (a *App) scheduleTextInputRepaint() {
 	if a.hwnd == 0 || !a.textTool.Active || !a.textTool.Editing {
 		return
 	}
-	// A180: while the IME is active, a backwards delete state is held as a
-	// pending transaction. Ninety-six milliseconds is long enough for the usual
-	// delete/recreate pair to arrive, but a genuine Backspace still becomes
-	// visible promptly if no replacement follows.
-	delay := uintptr(28)
+	// Do not restart the timer on every character: a constant typing stream
+	// otherwise starves the preview forever and makes Space/Enter feel late.
+	// The input EDIT itself processes keys immediately and preserves ordering.
+	if a.textTool.PreviewTimerPending {
+		return
+	}
+	// Preserve the A180 IME shrink grace period. Non-IME updates are batched
+	// roughly once per display frame rather than reformatting each keystroke.
+	delay := uintptr(16)
 	if a.textTool.IMEActive {
 		delay = 96
 	}
-	procKillTimer.Call(a.hwnd, textPreviewTimerID)
-	procSetTimer.Call(a.hwnd, textPreviewTimerID, delay, 0)
+	if id, _, _ := procSetTimer.Call(a.hwnd, textPreviewTimerID, delay, 0); id != 0 {
+		a.textTool.PreviewTimerPending = true
+	}
 }
 
 func (a *App) vectorPreviewCanvasBounds(rawX, rawY int, constrain bool, arrow bool) (left, top, right, bottom int) {
@@ -8215,10 +8270,8 @@ func (a *App) zoomSourceRect(centerX, centerY, target int) (x, y, w, h int) {
 	if pageH < 1 {
 		pageH = 1
 	}
-	w = (pageW + target - 1) / target
-	h = (pageH + target - 1) / target
-	w = clamp(w, 1, a.canvas.W)
-	h = clamp(h, 1, a.canvas.H)
+	w = magnifierSelectionSpan(pageW, target, a.canvas.W)
+	h = magnifierSelectionSpan(pageH, target, a.canvas.H)
 	x = centerX - w/2
 	y = centerY - h/2
 	x = clamp(x, 0, max(a.canvas.W-w, 0))
@@ -8243,15 +8296,29 @@ func (a *App) updateZoomPreviewAt(mx, my int) bool {
 	return !oldValid || oldX != x || oldY != y || oldW != w || oldH != h
 }
 
-func (a *App) applyZoomPreview(mx, my int) {
-	if !a.updateZoomPreviewAt(mx, my) || !a.zoomPreviewValid {
-		if !a.zoomPreviewValid {
-			return
-		}
+// autoZoomWholeImage skips the dashed target-selection step only when the
+// *entire* canvas fits in the selected magnifier viewport at the new scale.
+// Keep the ordinary marquee flow if either dimension is too large.
+func (a *App) autoZoomWholeImage() bool {
+	if a.tool != ToolMagnifier || !a.validZoomLevel(a.zoomTarget) || a.zoomTarget <= a.zoom {
+		return false
 	}
+	var rc RECT
+	procGetClientRect.Call(a.hwnd, uintptr(unsafe.Pointer(&rc)))
+	ws, _, _, _ := a.layout(rc)
+	pageW, pageH := int(ws.Right-ws.Left)-16, int(ws.Bottom-ws.Top)-16
+	if !magnifierWholeImageFits(a.canvas.W, a.canvas.H, pageW, pageH, a.zoomTarget) {
+		return false
+	}
+	x, y, w, h := a.zoomSourceRect(a.canvas.W/2, a.canvas.H/2, a.zoomTarget)
+	logf("ZOOM whole-image auto-apply target=%d canvas=%dx%d", a.zoomTarget, w, h)
+	a.commitMagnifierZoom(x, y, w, h)
+	return true
+}
+
+func (a *App) commitMagnifierZoom(x, y, w, h int) {
 	old := a.zoom
 	target := a.zoomTarget
-	x, y, w, h := a.zoomPreviewX, a.zoomPreviewY, a.zoomPreviewW, a.zoomPreviewH
 	a.zoom = target
 	a.updateZoomDependentViewMenu()
 	// Align the selected source rectangle with the workspace's inner margin.
@@ -8266,6 +8333,15 @@ func (a *App) applyZoomPreview(mx, my int) {
 	action := fmt.Sprintf("확대 완료: %dx, 선택 영역 (%d,%d) %d × %d.", target, x, y, w, h)
 	logf("ZOOM preview-commit old=%d new=%d source=(%d,%d %dx%d) scroll=%d,%d", old, target, x, y, w, h, a.scrollX, a.scrollY)
 	a.restoreToolAfterMagnifier(action)
+}
+
+func (a *App) applyZoomPreview(mx, my int) {
+	if !a.updateZoomPreviewAt(mx, my) || !a.zoomPreviewValid {
+		if !a.zoomPreviewValid {
+			return
+		}
+	}
+	a.commitMagnifierZoom(a.zoomPreviewX, a.zoomPreviewY, a.zoomPreviewW, a.zoomPreviewH)
 }
 
 func (a *App) paintZoomPreview(hdc uintptr, ox, oy int) {
@@ -15075,6 +15151,9 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 				}
 				a.zoomTarget = z
 				a.clearZoomPreview()
+				if a.autoZoomWholeImage() {
+					return
+				}
 				if z == a.zoom {
 					a.statusText = fmt.Sprintf("현재 배율은 이미 %dx입니다.", z)
 				} else {
@@ -16443,7 +16522,7 @@ func (a *App) showZoomPopup() {
 	var pt POINT
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
 	cmd, _, _ := procTrackPopupMenu.Call(m, TPM_LEFTALIGN|TPM_TOPALIGN|TPM_RETURNCMD|TPM_NONOTIFY, uintptr(pt.X), uintptr(pt.Y), 0, a.hwnd, 0)
-	if cmd >= ID_ZOOM_BASE+1 && cmd <= ID_ZOOM_BASE+15 {
+	if cmd >= ID_ZOOM_BASE+1 && cmd <= ID_ZOOM_BASE+20 {
 		z := int(cmd) - ID_ZOOM_BASE
 		if z < a.zoom {
 			a.setZoomTopLeft(z)
@@ -16693,7 +16772,7 @@ func (a *App) command(id int) {
 		}
 		return
 	}
-	if id >= ID_ZOOM_BASE && id <= ID_ZOOM_BASE+15 {
+	if id >= ID_ZOOM_BASE && id <= ID_ZOOM_BASE+20 {
 		z := id - ID_ZOOM_BASE
 		if z < a.zoom {
 			a.setZoomTopLeft(z)
@@ -17325,11 +17404,13 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) (ret uintptr) {
 		}
 		if wparam == textPreviewTimerID {
 			procKillTimer.Call(app.hwnd, textPreviewTimerID)
+			app.textTool.PreviewTimerPending = false
 			if app.textTool.Active && app.textTool.Editing {
-				if app.flushPendingTextIME() {
-					app.syncTextLayoutControl()
-					app.textTool.CaretVisible = true
-				}
+				app.flushPendingTextIME()
+				// One Rich Edit update for the latest coherent text, not one per
+				// EN_CHANGE or transient IME replacement notification.
+				app.syncTextLayoutControl()
+				app.textTool.CaretVisible = true
 				app.requestTextRepaint(false)
 			}
 			return 0
