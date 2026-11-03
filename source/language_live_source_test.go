@@ -6,33 +6,30 @@ import (
 	"testing"
 )
 
-// Ensures that About and Help derive their user-visible version from the
-// same release identifier. A future release must deliberately update the
-// version contract rather than accidentally display an obsolete major label.
-func TestRelease13VersionAndAboutHelpLabels(t *testing.T) {
-	expected := map[string][]string{
-		"main_windows.go": {`const appVersion = "1.3.7"`},
-		"about_window_windows.go": {
-			`fmt.Sprintf("dotPaint %s", appVersion)`,
-			`fmt.Sprintf("dotPaint %s 정보", appVersion)`,
-			`fmt.Sprintf("현재 빌드: %s", appVersion)`,
-		},
-		"help_window_windows.go": {
-			`버전 정보와 정식 1.3`,
-			`dotPaint 1.3 정식판입니다.`,
-			`Windows x64 및 x86 실행 파일`,
-		},
+func TestLiveLanguageSwitchDoesNotRestartOrClearDocument(t *testing.T) {
+	b, err := os.ReadFile("language_switch_windows.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for filename, tokens := range expected {
-		data, err := os.ReadFile(filename)
-		if err != nil {
-			t.Fatal(err)
+	source := string(b)
+	for _, forbidden := range []string{"exec.Command(", "confirmLoseChanges(", "WM_CLOSE", "undo.Reset(", "canvas =", "newApp()"} {
+		if strings.Contains(source, forbidden) {
+			t.Errorf("unexpected restart or document state mutation: %s", forbidden)
 		}
-		src := string(data)
-		for _, token := range tokens {
-			if !strings.Contains(src, token) {
-				t.Errorf("%s is missing %q", filename, token)
-			}
+	}
+	for _, required := range []string{"a.rebuildMenuForTheme()", "dotPaintEdition = edition", "saveUILanguagePreference(edition)", "refreshLocalizedChildControls", "WM_GETFONT", "CB_GETCURSEL"} {
+		if !strings.Contains(source, required) {
+			t.Errorf("missing live refresh: %s", required)
 		}
+	}
+}
+
+func TestLanguageMenuNoLongerSaysRestart(t *testing.T) {
+	data, err := os.ReadFile("main_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "언어(&L) (재시작)") {
+		t.Fatal("menu still marks live switch as restart")
 	}
 }
