@@ -1,0 +1,64 @@
+name: Publish dotPaint v1.3.9
+
+# One-time publishing workflow. It is triggered only by adding/updating
+# this workflow on main, not by unrelated source or README commits.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-v1.3.9.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Check out the reviewed 1.3.9 source and release notes
+        uses: actions/checkout@v4
+
+      - name: Download binaries from successful v1.3.9 Build and test run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download 41568267095 --repo "${GITHUB_REPOSITORY}" \
+            --name dotPaint-v1.3.9-Windows-CI --dir dist
+
+      - name: Verify public executables and 10 MiB cap
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in dist/dotPaint_1.3.9_x64.exe dist/dotPaint_1.3.9_x86.exe; do
+            test -s "$f"
+            test "$(head -c 2 "$f")" = 'MZ'
+            bytes=$(stat -c%s "$f")
+            echo "$f: $bytes bytes"
+            test "$bytes" -le 10485760 || { echo "ERROR: standard EXE above 10 MiB"; exit 1; }
+          done
+          sha256sum dist/dotPaint_1.3.9_x64.exe dist/dotPaint_1.3.9_x86.exe
+          test -s RELEASE_NOTES_1.3.9.md
+          test -s README.md
+
+      - name: Publish v1.3.9 as latest stable release (standard EXEs only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v1.3.9 --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo 'v1.3.9 release already exists; not replacing assets'
+            exit 0
+          fi
+          gh release create v1.3.9 \
+            dist/dotPaint_1.3.9_x64.exe \
+            dist/dotPaint_1.3.9_x86.exe \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title 'dotPaint 1.3.9 — Text Input and 20x Zoom' \
+            --notes-file RELEASE_NOTES_1.3.9.md \
+            --latest
