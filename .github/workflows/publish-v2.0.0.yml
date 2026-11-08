@@ -1,0 +1,68 @@
+name: Publish dotPaint v2.0.0
+
+# Safe to add before source sync: the workflow must be started manually,
+# and it REFUSES to publish if the source is not exactly version 2.0.0.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate-build-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out official source
+        uses: actions/checkout@v4
+
+      - name: Install Go 1.23.2
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Verify source version and release notes before any publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -qE '^const appVersion = "2[.]0[.]0"$' source/main_windows.go
+          test -s RELEASE_NOTES_2.0.0.md
+          test -s THIRD_PARTY_NOTICES.md
+
+      - name: Run complete regression tests
+        working-directory: source
+        run: go test ./...
+
+      - name: Run Go static analyzer
+        working-directory: source
+        run: go vet ./...
+
+      - name: Build Windows x64 standard executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go -C source build             -buildvcs=false -trimpath -ldflags='-H=windowsgui -s -w -buildid='             -o ../dist/dotPaint_2.0.0_x64.exe .
+
+      - name: Verify 10 MiB limit and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(head -c 2 dist/dotPaint_2.0.0_x64.exe)" = 'MZ'
+          size=$(stat -c%s dist/dotPaint_2.0.0_x64.exe)
+          echo "dotPaint 2.0.0 x64: $size bytes"
+          test "$size" -le 10485760
+          sha256sum dist/dotPaint_2.0.0_x64.exe
+
+      - name: Publish stable v2.0.0 (standard x64 only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v2.0.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'v2.0.0 release already exists; will not overwrite it'
+            exit 0
+          fi
+          gh release create v2.0.0 dist/dotPaint_2.0.0_x64.exe             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"             --title 'dotPaint 2.0.0 — Official Release'             --notes-file RELEASE_NOTES_2.0.0.md --latest
