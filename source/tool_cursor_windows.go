@@ -58,6 +58,7 @@ const (
 	cursorTransparent uint8 = iota
 	cursorBlack
 	cursorWhite
+	cursorInvert // AND=1 XOR=1: true display-pixel inversion
 )
 
 type monoCursorCanvas struct {
@@ -246,8 +247,10 @@ func (c *monoCursorCanvas) cursorMasks() (andMask, xorMask []byte) {
 			}
 			idx := y*rowBytes + x/8
 			bit := byte(0x80 >> uint(x&7))
-			andMask[idx] &^= bit
-			if v == cursorWhite {
+			if v != cursorInvert {
+				andMask[idx] &^= bit
+			}
+			if v == cursorWhite || v == cursorInvert {
 				xorMask[idx] |= bit
 			}
 		}
@@ -558,6 +561,9 @@ func initToolCursors(hinst uintptr) {
 	a181EraserCursor = a182InvisibleCursor
 	a181BrushCursor = a182CrossCursor
 
+	initObjectCursors(hinst)
+	initFixedObjectPointer(hinst)
+	a181ToolCursors[ToolObjectSelect] = objectCursors[0]
 	a181ToolCursors[ToolFreeSelect] = a182SelectionCursor
 	a181ToolCursors[ToolRectSelect] = a182SelectionCursor
 	a181ToolCursors[ToolColorRegionSelect] = a182ColourCursor
@@ -578,6 +584,7 @@ func destroyToolCursors() {
 			procDestroyCursorA181.Call(h)
 		}
 	}
+	objectCursors = [6]uintptr{}
 	a181CursorHandles = nil
 	a181ToolCursors = nil
 	a181MarqueeCursor = 0
@@ -736,6 +743,27 @@ func textBoxResizeCursor149(handle int) uintptr {
 }
 
 func (a *App) cursorForClientPoint(mx, my int, client RECT) uintptr {
+	if a.objectDragging {
+		return a.objectInteractionCursor(a.objectDragHandle)
+	}
+	if a.tool == ToolObjectSelect {
+		if over, cursor := a.pointOverAnyPanelA181(mx, my, client); over {
+			return cursor
+		}
+		ws, _, _, _ := a.layout(client)
+		if pointInRect(mx, my, ws) {
+			if a.objectArmed != 0 {
+				return a.objectInteractionCursor(ObjectBody)
+			}
+			if i, h := a.hitObjectClient(mx, my); i >= 0 {
+				return a.objectInteractionCursor(h)
+			}
+			if objectCursors[0] != 0 {
+				return a.adaptiveCursorHandleA217(objectCursors[0], mx, my)
+			}
+		}
+		return loadSystemCursorA181(IDC_ARROW)
+	}
 	if a.pendingCanvasResize || a.resizingCanvas {
 		return resizeCursorForHandleA181(a.resizeHandle)
 	}

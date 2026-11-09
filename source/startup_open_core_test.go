@@ -14,6 +14,8 @@ func TestStartupDocumentPathFromExplorer(t *testing.T) {
 	}{
 		{name: "plain launch"},
 		{name: "png Korean spaces", args: []string{`C:\Users\사용자\내 그림\별 사진.png`}, want: `C:\Users\사용자\내 그림\별 사진.png`},
+		{name: "DOP project Korean spaces", args: []string{`C:\Users\사용자\내 그림\펭귄과 회로.dop`}, want: `C:\Users\사용자\내 그림\펭귄과 회로.dop`},
+		{name: "DOP project uppercase extension", args: []string{`D:\works\DOTPAINT.DOP`}, want: `D:\works\DOTPAINT.DOP`},
 		{name: "bmp", args: []string{`D:\Images\art.bmp`}, want: `D:\Images\art.bmp`},
 		{name: "jpg uppercase", args: []string{`D:\Images\a.JPG`}, want: `D:\Images\a.JPG`},
 		{name: "jpeg", args: []string{`D:\Images\a.jpeg`}, want: `D:\Images\a.jpeg`},

@@ -107,9 +107,8 @@ func flattenEllipseCardinalCaps(mask []bool, w, h, spanX, spanY int, flattenVert
 // Both the outer silhouette and the inner hole receive the same treatment, so
 // the stroke remains concentric and exactly mirrored in all four directions.
 func symmetricEllipseRingMask(w, h, thickness int) []bool {
-	mask := make([]bool, w*h)
 	if w <= 0 || h <= 0 || thickness <= 0 {
-		return mask
+		return make([]bool, w*h)
 	}
 	if thickness > w {
 		thickness = w
@@ -117,29 +116,22 @@ func symmetricEllipseRingMask(w, h, thickness int) []bool {
 	if thickness > h {
 		thickness = h
 	}
-
-	outerX := w - 1
-	outerY := h - 1
-	innerX := outerX - 2*thickness
-	innerY := outerY - 2*thickness
-
-	outer := symmetricFilledEllipseMask(w, h, outerX, outerY)
+	outerX, outerY := w-1, h-1
+	innerX, innerY := outerX-2*thickness, outerY-2*thickness
+	// Use the outer ellipse as the final ring buffer. The previous code
+	// allocated a third full-size mask and copied the outer-minus-inner ring
+	// into it; subtracting the inner pixels in place preserves every pixel.
+	mask := symmetricFilledEllipseMask(w, h, outerX, outerY)
 	flattenVertical := h > 20
 	flattenHorizontal := w > 20
-	flattenEllipseCardinalCaps(outer, w, h, outerX, outerY, flattenVertical, flattenHorizontal)
-
-	var inner []bool
+	flattenEllipseCardinalCaps(mask, w, h, outerX, outerY, flattenVertical, flattenHorizontal)
 	if innerX > 0 && innerY > 0 {
-		inner = symmetricFilledEllipseMask(w, h, innerX, innerY)
-		// The user-visible shape size controls whether a cardinal direction is
-		// flattened. Applying the same decision to the hole removes the matching
-		// inward-facing point while retaining exact stroke symmetry.
+		inner := symmetricFilledEllipseMask(w, h, innerX, innerY)
 		flattenEllipseCardinalCaps(inner, w, h, innerX, innerY, flattenVertical, flattenHorizontal)
-	}
-
-	for i, on := range outer {
-		if on && (inner == nil || !inner[i]) {
-			mask[i] = true
+		for i, on := range inner {
+			if on {
+				mask[i] = false
+			}
 		}
 	}
 	bridgeExtremeEllipseGaps(mask, w, h)

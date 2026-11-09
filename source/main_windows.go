@@ -12,7 +12,6 @@ import (
 	"hash/crc32"
 	"image"
 	_ "image/gif"
-	"image/jpeg"
 	"image/png"
 	"math"
 	"math/rand"
@@ -39,7 +38,7 @@ import (
 // Historical 1.2.38 regression marker retained for inherited source tests:
 // const appVersion = "1.2.38"
 // Release 1.2.39 regression marker: const appVersion = "1.2.40"
-const appVersion = "1.3.9"
+const appVersion = "2.0.0"
 
 // A1250: one summary per Shift hold, never one synchronous log write per repeat.
 var shiftPreviewAutorepeatsIgnored uint64
@@ -178,6 +177,7 @@ const (
 	WM_HSCROLL                  = 0x0114
 	WM_VSCROLL                  = 0x0115
 	WM_KEYDOWN                  = 0x0100
+	WM_CHAR                     = 0x0102
 	WM_KEYUP                    = 0x0101
 	WM_IME_STARTCOMPOSITION     = 0x010D
 	WM_IME_ENDCOMPOSITION       = 0x010E
@@ -191,6 +191,8 @@ const (
 	WM_RBUTTONDOWN              = 0x0204
 	WM_RBUTTONUP                = 0x0205
 	WM_MOUSEMOVE                = 0x0200
+	WM_MOUSELEAVE               = 0x02A3
+	WM_ACTIVATEAPP              = 0x001C
 	WM_MOUSEWHEEL               = 0x020A
 	WM_CAPTURECHANGED           = 0x0215
 	WM_DROPFILES                = 0x0233
@@ -361,6 +363,9 @@ const (
 	CBN_EDITCHANGE       = 5
 	CBN_CLOSEUP          = 8
 	EN_CHANGE            = 0x0300
+	EN_SETFOCUS          = 0x0100
+	EN_KILLFOCUS         = 0x0200
+	WM_TEXTSIZE_COMMIT   = 0x80D2 // posted after numeric EDIT loses focus
 	EM_GETSEL            = 0x00B0
 	EM_SETSEL            = 0x00B1
 	EM_GETRECT           = 0x00B2
@@ -378,6 +383,9 @@ const (
 	CFM_BOLD             = 0x00000001
 	CFM_ITALIC           = 0x00000002
 	CFM_UNDERLINE        = 0x00000004
+	CFM_SUBSCRIPT        = 0x00030000
+	CFE_SUBSCRIPT        = 0x00010000
+	CFE_SUPERSCRIPT      = 0x00020000
 	CFM_SIZE             = 0x80000000
 	CFM_COLOR            = 0x40000000
 	CFM_FACE             = 0x20000000
@@ -485,6 +493,9 @@ const (
 	ID_VIEW_LANGUAGE_EN
 )
 
+const ID_SELECT_OBJECT_TOOL = 1251
+const WM_INITMENUPOPUP = 0x0117
+
 const (
 	ID_IMAGE_FLIP = 1301 + iota
 	ID_IMAGE_STRETCH
@@ -492,6 +503,7 @@ const (
 	ID_IMAGE_ATTRIBUTES
 	ID_IMAGE_CLEAR
 	ID_IMAGE_OPAQUE
+	ID_IMAGE_RASTER_MODE
 )
 
 const (
@@ -542,7 +554,10 @@ const (
 	ID_TEXT_BOLD
 	ID_TEXT_ITALIC
 	ID_TEXT_UNDERLINE
+	ID_TEXT_SUPERSCRIPT
+	ID_TEXT_SUBSCRIPT
 	ID_TEXT_LAYOUTBOX
+	ID_TEXT_SIZEEDIT
 )
 
 // --- Win32 structures ------------------------------------------------------
@@ -590,6 +605,23 @@ type CHARFORMATW struct {
 	BPitchAndFamily byte
 	SzFaceName      [32]uint16
 }
+
+// CHARFORMAT2W enables native Rich Edit superscript/subscript metrics.
+type CHARFORMAT2W struct {
+	CHARFORMATW
+	WWeight         uint16
+	SSpacing        int16
+	CrBackColor     uint32
+	LCID            uint32
+	DwReserved      uint32
+	SStyle          int16
+	WKerning        uint16
+	BUnderlineType  byte
+	BAnimation      byte
+	BRevAuthor      byte
+	BUnderlineColor byte
+}
+
 type MSG struct {
 	Hwnd     uintptr
 	Message  uint32
@@ -817,6 +849,7 @@ var (
 	procSendMessageW                  = modUser32.NewProc("SendMessageW")
 	procSetFocus                      = modUser32.NewProc("SetFocus")
 	procGetFocus                      = modUser32.NewProc("GetFocus")
+	procIsChild                       = modUser32.NewProc("IsChild")
 	procGetNextDlgTabItem             = modUser32.NewProc("GetNextDlgTabItem")
 	procGetWindowTextW                = modUser32.NewProc("GetWindowTextW")
 	procGetWindowTextLengthW          = modUser32.NewProc("GetWindowTextLengthW")
@@ -917,12 +950,6 @@ func sendMessage(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 	return r
 }
 
-const transparentColor uint32 = 0x01000000
-
-func rgb(r, g, b byte) uint32 {
-	return uint32(r) | uint32(g)<<8 | uint32(b)<<16
-}
-
 func darkModeEnabled() bool {
 	return app != nil && app.darkMode
 }
@@ -988,36 +1015,11 @@ func drawUIText(hdc uintptr, text string, rc RECT, format uint32, c uint32) {
 	drawText(hdc, text, rc, format, uiColor(c))
 }
 
-func isTransparentColor(c uint32) bool { return c == transparentColor }
-
 func gdiPreviewColor(c uint32) uint32 {
 	if isTransparentColor(c) {
 		return rgb(96, 96, 96)
 	}
 	return c
-}
-
-func colorrefToBGRA(c uint32) [4]byte {
-	if isTransparentColor(c) {
-		return [4]byte{0, 0, 0, 0}
-	}
-	return [4]byte{byte((c >> 16) & 0xff), byte((c >> 8) & 0xff), byte(c & 0xff), 255}
-}
-
-func bgraToColorref(b, g, r byte) uint32 { return rgb(r, g, b) }
-
-func rgba16ToStraight8(r, g, b, a uint32) (byte, byte, byte, byte) {
-	if a == 0 {
-		return 0, 0, 0, 0
-	}
-	convert := func(v uint32) byte {
-		straight := (uint64(v)*0xffff + uint64(a)/2) / uint64(a)
-		if straight > 0xffff {
-			straight = 0xffff
-		}
-		return byte(straight >> 8)
-	}
-	return convert(r), convert(g), convert(b), byte(a >> 8)
 }
 
 func loword(v uintptr) uint16      { return uint16(v & 0xffff) }
@@ -1202,1005 +1204,7 @@ func selectDefaultFont(hdc uintptr) uintptr {
 	return old
 }
 
-func clamp(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}
-
 // --- Pixel canvas ----------------------------------------------------------
-type Canvas struct {
-	W, H int
-	Pix  []byte // BGRA, top-down
-}
-
-func NewCanvas(w, h int, c uint32) *Canvas {
-	cv := &Canvas{W: w, H: h, Pix: make([]byte, w*h*4)}
-	cv.Clear(c)
-	return cv
-}
-
-func (c *Canvas) ClonePixels() []byte {
-	p := make([]byte, len(c.Pix))
-	copy(p, c.Pix)
-	return p
-}
-
-func (c *Canvas) SetPixel(x, y int, clr uint32) {
-	if x < 0 || y < 0 || x >= c.W || y >= c.H {
-		return
-	}
-	i := (y*c.W + x) * 4
-	px := colorrefToBGRA(clr)
-	c.Pix[i], c.Pix[i+1], c.Pix[i+2], c.Pix[i+3] = px[0], px[1], px[2], px[3]
-}
-
-func (c *Canvas) GetPixel(x, y int) uint32 {
-	if x < 0 || y < 0 || x >= c.W || y >= c.H {
-		return rgb(255, 255, 255)
-	}
-	i := (y*c.W + x) * 4
-	if c.Pix[i+3] == 0 {
-		return transparentColor
-	}
-	return bgraToColorref(c.Pix[i], c.Pix[i+1], c.Pix[i+2])
-}
-
-func (c *Canvas) Clear(clr uint32) {
-	px := colorrefToBGRA(clr)
-	for i := 0; i < len(c.Pix); i += 4 {
-		c.Pix[i], c.Pix[i+1], c.Pix[i+2], c.Pix[i+3] = px[0], px[1], px[2], px[3]
-	}
-}
-
-func (c *Canvas) DrawLine(x0, y0, x1, y1 int, clr uint32) {
-	dx := int(math.Abs(float64(x1 - x0)))
-	sx := -1
-	if x0 < x1 {
-		sx = 1
-	}
-	dy := -int(math.Abs(float64(y1 - y0)))
-	sy := -1
-	if y0 < y1 {
-		sy = 1
-	}
-	err := dx + dy
-	for {
-		c.SetPixel(x0, y0, clr)
-		if x0 == x1 && y0 == y1 {
-			break
-		}
-		e2 := 2 * err
-		if e2 >= dy {
-			err += dy
-			x0 += sx
-		}
-		if e2 <= dx {
-			err += dx
-			y0 += sy
-		}
-	}
-}
-
-// blendPixelCoverage composites one raster-line sample into the straight-alpha
-// BGRA canvas. Transparent foreground acts as a partial eraser when coverage is
-// below one, which lets anti-aliased transparent lines keep a soft alpha edge.
-func (c *Canvas) blendPixelCoverage(x, y int, clr uint32, coverage float64) {
-	if x < 0 || y < 0 || x >= c.W || y >= c.H || coverage <= 0 {
-		return
-	}
-	if coverage > 1 {
-		coverage = 1
-	}
-	i := (y*c.W + x) * 4
-	dstA := float64(c.Pix[i+3]) / 255.0
-	if isTransparentColor(clr) {
-		outA := dstA * (1.0 - coverage)
-		c.Pix[i+3] = byte(math.Round(outA * 255.0))
-		if c.Pix[i+3] == 0 {
-			c.Pix[i], c.Pix[i+1], c.Pix[i+2] = 0, 0, 0
-		}
-		return
-	}
-	src := colorrefToBGRA(clr)
-	srcA := coverage
-	outA := srcA + dstA*(1.0-srcA)
-	if outA <= 0 {
-		c.Pix[i], c.Pix[i+1], c.Pix[i+2], c.Pix[i+3] = 0, 0, 0, 0
-		return
-	}
-	for ch := 0; ch < 3; ch++ {
-		dst := float64(c.Pix[i+ch])
-		s := float64(src[ch])
-		out := (s*srcA + dst*dstA*(1.0-srcA)) / outA
-		c.Pix[i+ch] = byte(clamp(int(math.Round(out)), 0, 255))
-	}
-	c.Pix[i+3] = byte(clamp(int(math.Round(outA*255.0)), 0, 255))
-}
-
-func pointSegmentDistance(px, py, x0, y0, x1, y1 float64) float64 {
-	dx, dy := x1-x0, y1-y0
-	denom := dx*dx + dy*dy
-	if denom <= 0 {
-		return math.Hypot(px-x0, py-y0)
-	}
-	t := ((px-x0)*dx + (py-y0)*dy) / denom
-	if t < 0 {
-		t = 0
-	} else if t > 1 {
-		t = 1
-	}
-	qx, qy := x0+t*dx, y0+t*dy
-	return math.Hypot(px-qx, py-qy)
-}
-
-// applyVectorAlphaMask composites an invisible vector contribution mask once.
-// Component geometry is unioned in the mask first, avoiding overlap darkening
-// and making preview and commit use the exact same alpha values.
-func (c *Canvas) applyVectorAlphaMask(mask *vectorAlphaMask, clr uint32) {
-	if mask == nil || mask.W <= 0 || mask.H <= 0 {
-		return
-	}
-	// A112 records exactly which alpha cells became non-zero. Long diagonal
-	// arrows used to scan the entire enclosing rectangle again during compositing,
-	// even though almost all of it was empty. Iterating touched cells preserves
-	// every alpha value while avoiding those empty corners a second time.
-	for _, idx := range mask.Touched {
-		if idx < 0 || idx >= len(mask.Alpha) {
-			continue
-		}
-		x := mask.Left + idx%mask.W
-		y := mask.Top + idx/mask.W
-		if x < 0 || x >= c.W || y < 0 || y >= c.H {
-			continue
-		}
-		a := mask.Alpha[idx]
-		if a == 255 {
-			c.SetPixel(x, y, clr)
-		} else if a != 0 {
-			c.blendPixelCoverage(x, y, clr, float64(a)/255.0)
-		}
-	}
-}
-
-// DrawStyledLine is the single source of truth for preview and commit. A91
-// shares the arrow shaft's square brush, flat caps, odd/even half-pixel axis,
-// and eight-way AA bypass. Horizontal, vertical, and exact 45-degree lines stay
-// fully opaque even when AA is enabled; only arbitrary slopes receive coverage.
-func (c *Canvas) DrawStyledLine(x0, y0, x1, y1, size int, antialias bool, clr uint32) {
-	size = clamp(size, 1, 40)
-	offsetX, offsetY := arrowStrokeOffset(x0, y0, x1, y1, size)
-	effectiveAA := arrowEffectiveAntialias(antialias, x0, y0, x1, y1)
-	c.DrawArrowShaftLine(x0, y0, x1, y1, size, effectiveAA, offsetX, offsetY, clr)
-}
-
-// DrawStyledPixelPath keeps strict tan-n staircase geometry while using the
-// same square brush and parity-aware axis as arrows. It never replaces the
-// integer path with an unrelated floating vector.
-func (c *Canvas) DrawStyledPixelPath(points []PixelPoint, size int, antialias bool, clr uint32) {
-	if len(points) == 0 {
-		return
-	}
-	size = clamp(size, 1, 40)
-	first := points[0]
-	last := points[len(points)-1]
-	offsetX, offsetY := arrowStrokeOffset(first.X, first.Y, last.X, last.Y, size)
-	effectiveAA := arrowEffectiveAntialias(antialias, first.X, first.Y, last.X, last.Y)
-	c.DrawArrowShaftPixelPath(points, size, effectiveAA, offsetX, offsetY, clr)
-}
-
-// DrawRoundCurvePixelPath renders the curve tool with one filled circular nib
-// stamped along its complete integer centreline.  The former implementation
-// reused the arrow shaft's square, butt-capped rectangles for every one-pixel
-// Bezier segment.  At a change of tangent those tiny rotated rectangles exposed
-// their corners as outward "thorns", and their projected width varied with
-// direction.  A union of identical circular nibs gives round joins/caps and a
-// direction-independent nominal thickness.  Preview and commit share this
-// exact renderer.
-func (c *Canvas) DrawRoundCurvePixelPath(points []PixelPoint, size int, antialias bool, clr uint32) {
-	if len(points) == 0 || c == nil || c.W <= 0 || c.H <= 0 {
-		return
-	}
-	size = clamp(size, 1, 40)
-	nib := buildCurveRoundNib(size, antialias)
-	if len(nib) == 0 {
-		return
-	}
-
-	minX, maxX := points[0].X, points[0].X
-	minY, maxY := points[0].Y, points[0].Y
-	minDX, maxDX := nib[0].DX, nib[0].DX
-	minDY, maxDY := nib[0].DY, nib[0].DY
-	for _, p := range points[1:] {
-		minX, maxX = min(minX, p.X), max(maxX, p.X)
-		minY, maxY = min(minY, p.Y), max(maxY, p.Y)
-	}
-	for _, cell := range nib[1:] {
-		minDX, maxDX = min(minDX, cell.DX), max(maxDX, cell.DX)
-		minDY, maxDY = min(minDY, cell.DY), max(maxDY, cell.DY)
-	}
-	left, right := minX+minDX, maxX+maxDX
-	top, bottom := minY+minDY, maxY+maxDY
-	if right < 0 || bottom < 0 || left >= c.W || top >= c.H {
-		return
-	}
-	left, right = clamp(left, 0, c.W-1), clamp(right, 0, c.W-1)
-	top, bottom = clamp(top, 0, c.H-1), clamp(bottom, 0, c.H-1)
-	mask := newVectorAlphaMask(left, top, right, bottom)
-	for _, p := range points {
-		for _, cell := range nib {
-			x, y := p.X+cell.DX, p.Y+cell.DY
-			if cell.Coverage >= 1 {
-				mask.setOpaque(x, y)
-			} else {
-				mask.setMaxCoverage(x, y, cell.Coverage)
-			}
-		}
-	}
-	c.applyVectorAlphaMask(mask, clr)
-}
-
-// DrawStyledStrictTanPath preserves the exact integer tan staircase as the
-// fully opaque core, then derives its AA fringe from one ideal continuous line
-// joining the first and last staircase pixels.  It deliberately does not
-// antialias every one-pixel subsegment: doing so creates a grey cap around each
-// micro-step and can put grey pixels on the visually wrong side of a descending
-// line.  Preview and commit share this path.
-func (c *Canvas) DrawStyledStrictTanPath(points []PixelPoint, stepX, stepY, majorSteps, size int, antialias bool, clr uint32) {
-	if len(points) == 0 {
-		return
-	}
-	size = clamp(size, 1, 40)
-	first := points[0]
-	// The selected reduced ratio, not the current partial staircase endpoint,
-	// owns the parity axis and AA policy. Otherwise tan 1/3 would temporarily
-	// look horizontal for its first two pixels and change phase as it grows.
-	offsetX, offsetY := arrowStrokeOffset(first.X, first.Y, first.X+stepX, first.Y+stepY, size)
-	effectiveAA := arrowEffectiveAntialias(antialias, 0, 0, stepX, stepY)
-	c.DrawArrowShaftStrictTanPixelPath(points, stepX, stepY, majorSteps, size, effectiveAA, offsetX, offsetY, clr)
-}
-
-// DrawArrowShaftLine renders a square/butt-capped arrow shaft on the same
-// parity-aware floating axis as its head.  Even widths use the upper/left
-// half-pixel axis chosen by arrowStrokeOffset.  The flat tail and rear edge avoid
-// the round blobs produced by distance-to-segment caps.
-func (c *Canvas) DrawArrowShaftLine(x0, y0, x1, y1, size int, antialias bool, offsetX, offsetY float64, clr uint32) {
-	size = clamp(size, 1, 40)
-	fx0, fy0 := float64(x0)+offsetX, float64(y0)+offsetY
-	fx1, fy1 := float64(x1)+offsetX, float64(y1)+offsetY
-	halfWidth := float64(size) / 2.0
-	margin := int(math.Ceil(halfWidth + math.Max(math.Abs(offsetX), math.Abs(offsetY)) + 1.5))
-	left := clamp(min(x0, x1)-margin, 0, c.W-1)
-	right := clamp(max(x0, x1)+margin, 0, c.W-1)
-	top := clamp(min(y0, y1)-margin, 0, c.H-1)
-	bottom := clamp(max(y0, y1)+margin, 0, c.H-1)
-	mask := newVectorAlphaMask(left, top, right, bottom)
-	candidates := newVectorCoverageCandidates(left, top, right, bottom)
-	candidates.markStroke(fx0, fy0, fx1, fy1, size)
-	candidates.forEach(func(x, y int) {
-		if !antialias {
-			if pointInsideArrowStroke(float64(x), float64(y), fx0, fy0, fx1, fy1, size) {
-				mask.setOpaque(x, y)
-			}
-			return
-		}
-		mask.setMaxCoverage(x, y, arrowStrokeCoverageAt(float64(x), float64(y), fx0, fy0, fx1, fy1, size))
-	})
-	c.applyVectorAlphaMask(mask, clr)
-}
-
-// DrawArrowShaftPixelPath applies the same single perpendicular parity offset
-// and square/butt-capped brush to every segment of a strict tan staircase.  The
-// path remains a true integer tan-n staircase while cardinal subsegments stay
-// fully opaque even with AA enabled.
-func (c *Canvas) DrawArrowShaftPixelPath(points []PixelPoint, size int, antialias bool, offsetX, offsetY float64, clr uint32) {
-	if len(points) == 0 {
-		return
-	}
-	if len(points) == 1 {
-		c.DrawArrowShaftLine(points[0].X, points[0].Y, points[0].X, points[0].Y, size, antialias, offsetX, offsetY, clr)
-		return
-	}
-	size = clamp(size, 1, 40)
-	halfWidth := float64(size) / 2.0
-	margin := int(math.Ceil(halfWidth + math.Max(math.Abs(offsetX), math.Abs(offsetY)) + 1.0))
-	if !antialias {
-		for i := 1; i < len(points); i++ {
-			p0, p1 := points[i-1], points[i]
-			fx0, fy0 := float64(p0.X)+offsetX, float64(p0.Y)+offsetY
-			fx1, fy1 := float64(p1.X)+offsetX, float64(p1.Y)+offsetY
-			left := clamp(min(p0.X, p1.X)-margin, 0, c.W-1)
-			right := clamp(max(p0.X, p1.X)+margin, 0, c.W-1)
-			top := clamp(min(p0.Y, p1.Y)-margin, 0, c.H-1)
-			bottom := clamp(max(p0.Y, p1.Y)+margin, 0, c.H-1)
-			for y := top; y <= bottom; y++ {
-				for x := left; x <= right; x++ {
-					if pointInsideArrowStroke(float64(x), float64(y), fx0, fy0, fx1, fy1, size) {
-						c.SetPixel(x, y, clr)
-					}
-				}
-			}
-		}
-		return
-	}
-
-	coverage := make(map[int]float64, len(points)*(size+2))
-	for i := 1; i < len(points); i++ {
-		p0, p1 := points[i-1], points[i]
-		fx0, fy0 := float64(p0.X)+offsetX, float64(p0.Y)+offsetY
-		fx1, fy1 := float64(p1.X)+offsetX, float64(p1.Y)+offsetY
-		left := clamp(min(p0.X, p1.X)-margin, 0, c.W-1)
-		right := clamp(max(p0.X, p1.X)+margin, 0, c.W-1)
-		top := clamp(min(p0.Y, p1.Y)-margin, 0, c.H-1)
-		bottom := clamp(max(p0.Y, p1.Y)+margin, 0, c.H-1)
-		for y := top; y <= bottom; y++ {
-			for x := left; x <= right; x++ {
-				cov := arrowStrokeCoverageAt(float64(x), float64(y), fx0, fy0, fx1, fy1, size)
-				if cov <= 0 {
-					continue
-				}
-				idx := y*c.W + x
-				if cov > coverage[idx] {
-					coverage[idx] = cov
-				}
-			}
-		}
-	}
-	for idx, cov := range coverage {
-		c.blendPixelCoverage(idx%c.W, idx/c.W, clr, cov)
-	}
-}
-
-// DrawArrowShaftStrictTanPixelPath is the directed AA renderer for strict tan
-// staircases.  The integer staircase itself remains fully opaque and exact.
-// Only pixels outside that core may receive coverage from the single ideal
-// line that the staircase approximates.  This removes repeated subsegment-cap
-// halos without deleting AA outright.
-func (c *Canvas) DrawArrowShaftStrictTanPixelPath(points []PixelPoint, stepX, stepY, majorSteps, size int, antialias bool, offsetX, offsetY float64, clr uint32) {
-	if len(points) == 0 {
-		return
-	}
-	if len(points) == 1 {
-		c.DrawArrowShaftPixelPath(points, size, antialias, offsetX, offsetY, clr)
-		return
-	}
-
-	size = clamp(size, 1, 40)
-	halfWidth := float64(size) / 2.0
-	margin := int(math.Ceil(halfWidth + math.Max(math.Abs(offsetX), math.Abs(offsetY)) + 1.5))
-	minX, maxX := points[0].X, points[0].X
-	minY, maxY := points[0].Y, points[0].Y
-	for _, p := range points[1:] {
-		minX, maxX = min(minX, p.X), max(maxX, p.X)
-		minY, maxY = min(minY, p.Y), max(maxY, p.Y)
-	}
-	left := clamp(minX-margin, 0, c.W-1)
-	right := clamp(maxX+margin, 0, c.W-1)
-	top := clamp(minY-margin, 0, c.H-1)
-	bottom := clamp(maxY+margin, 0, c.H-1)
-	mask := newVectorAlphaMask(left, top, right, bottom)
-
-	// Invisible ideal vector fringe. A97 derives it from the selected reduced
-	// slope and dominant-axis length, not from the staircase's current last
-	// pixel. Its fixed motif-centred phase balances AA on the two sides and does
-	// not drift when the line grows by another native pixel.
-	first := points[0]
-	shadow, shadowOK := calculateStrictTanShadowSegment(first.X, first.Y, stepX, stepY, majorSteps, size)
-	if antialias && shadowOK {
-		candidates := newVectorCoverageCandidates(left, top, right, bottom)
-		candidates.markStroke(shadow.X0, shadow.Y0, shadow.X1, shadow.Y1, size)
-		candidates.forEach(func(x, y int) {
-			mask.setMaxCoverage(x, y, arrowStrokeLongEdgesCoverageAt(float64(x), float64(y), shadow.X0, shadow.Y0, shadow.X1, shadow.Y1, size))
-		})
-	}
-
-	// Exact integer staircase is unioned as the fully opaque core before the
-	// mask is composited, rather than painted in a separate pass.
-	for i := 1; i < len(points); i++ {
-		p0, p1 := points[i-1], points[i]
-		sx0, sy0 := float64(p0.X)+offsetX, float64(p0.Y)+offsetY
-		sx1, sy1 := float64(p1.X)+offsetX, float64(p1.Y)+offsetY
-		segLeft := clamp(min(p0.X, p1.X)-margin, left, right)
-		segRight := clamp(max(p0.X, p1.X)+margin, left, right)
-		segTop := clamp(min(p0.Y, p1.Y)-margin, top, bottom)
-		segBottom := clamp(max(p0.Y, p1.Y)+margin, top, bottom)
-		for y := segTop; y <= segBottom; y++ {
-			for x := segLeft; x <= segRight; x++ {
-				if shadowOK && !shadow.containsRasterCentre(float64(x), float64(y)) {
-					continue
-				}
-				if pointInsideArrowStroke(float64(x), float64(y), sx0, sy0, sx1, sy1, size) {
-					mask.setOpaque(x, y)
-				}
-			}
-		}
-	}
-	c.applyVectorAlphaMask(mask, clr)
-	if size == 1 && len(points) > 0 {
-		// The continuous-shadow clip can reject the first raster centre for a
-		// one-pixel strict tan staircase. Restore the logical origin explicitly;
-		// this is visually identical to the intended exact pixel path and is used
-		// by both live preview and final commit.
-		c.SetPixel(points[0].X, points[0].Y, clr)
-	}
-}
-
-// DrawUnifiedVectorArrow builds one hidden alpha mask for the shaft and head.
-// The two vector components are unioned at every sub-pixel sample and written
-// to the canvas once, eliminating neck seams and double-dark overlap pixels.
-func (c *Canvas) DrawUnifiedVectorArrow(x0, y0, x1, y1, size int, shaftAA bool, head ArrowHeadGeometry, headAA bool, strictPath []PixelPoint, strictShadow *strictTanShadowSegment, clr uint32) {
-	size = clamp(size, 1, 40)
-	hasShaft := x0 != x1 || y0 != y1
-	fx0, fy0 := float64(x0)+head.PixelOffsetX, float64(y0)+head.PixelOffsetY
-	fx1, fy1 := float64(x1)+head.PixelOffsetX, float64(y1)+head.PixelOffsetY
-	if strictShadow != nil && strictShadow.Length > 0 {
-		hasShaft = true
-		fx0, fy0 = strictShadow.X0, strictShadow.Y0
-		fx1, fy1 = strictShadow.X1, strictShadow.Y1
-	}
-	halfWidth := float64(size) / 2.0
-	minX := math.Min(head.Tip.X-head.TipHalfWidth, math.Min(head.SideA.X, head.SideB.X))
-	maxX := math.Max(head.Tip.X+head.TipHalfWidth, math.Max(head.SideA.X, head.SideB.X))
-	minY := math.Min(head.Tip.Y-head.TipHalfWidth, math.Min(head.SideA.Y, head.SideB.Y))
-	maxY := math.Max(head.Tip.Y+head.TipHalfWidth, math.Max(head.SideA.Y, head.SideB.Y))
-	if hasShaft {
-		minX = math.Min(minX, math.Min(fx0, fx1)-halfWidth-1)
-		maxX = math.Max(maxX, math.Max(fx0, fx1)+halfWidth+1)
-		minY = math.Min(minY, math.Min(fy0, fy1)-halfWidth-1)
-		maxY = math.Max(maxY, math.Max(fy0, fy1)+halfWidth+1)
-	}
-	left := clamp(int(math.Floor(minX))-1, 0, c.W-1)
-	right := clamp(int(math.Ceil(maxX))+1, 0, c.W-1)
-	top := clamp(int(math.Floor(minY))-1, 0, c.H-1)
-	bottom := clamp(int(math.Ceil(maxY))+1, 0, c.H-1)
-	if left > right || top > bottom {
-		return
-	}
-	mask := newVectorAlphaMask(left, top, right, bottom)
-	candidates := newVectorCoverageCandidates(left, top, right, bottom)
-	if hasShaft {
-		candidates.markStroke(fx0, fy0, fx1, fy1, size)
-	}
-	headLeft := int(math.Floor(math.Min(head.Tip.X-head.TipHalfWidth, math.Min(head.SideA.X, head.SideB.X)))) - 1
-	headRight := int(math.Ceil(math.Max(head.Tip.X+head.TipHalfWidth, math.Max(head.SideA.X, head.SideB.X)))) + 1
-	headTop := int(math.Floor(math.Min(head.Tip.Y-head.TipHalfWidth, math.Min(head.SideA.Y, head.SideB.Y)))) - 1
-	headBottom := int(math.Ceil(math.Max(head.Tip.Y+head.TipHalfWidth, math.Max(head.SideA.Y, head.SideB.Y)))) + 1
-	candidates.markRect(headLeft, headTop, headRight, headBottom)
-	candidates.forEach(func(x, y int) {
-		cov := arrowCompositeCoverageAt(float64(x), float64(y), hasShaft, fx0, fy0, fx1, fy1, size, shaftAA, head, headAA)
-		mask.setMaxCoverage(x, y, cov)
-	})
-
-	// Strict tan mode contributes its exact integer staircase to the same mask.
-	if len(strictPath) > 1 {
-		margin := int(math.Ceil(halfWidth + math.Max(math.Abs(head.PixelOffsetX), math.Abs(head.PixelOffsetY)) + 1.5))
-		for i := 1; i < len(strictPath); i++ {
-			p0, p1 := strictPath[i-1], strictPath[i]
-			sx0, sy0 := float64(p0.X)+head.PixelOffsetX, float64(p0.Y)+head.PixelOffsetY
-			sx1, sy1 := float64(p1.X)+head.PixelOffsetX, float64(p1.Y)+head.PixelOffsetY
-			segLeft := clamp(min(p0.X, p1.X)-margin, left, right)
-			segRight := clamp(max(p0.X, p1.X)+margin, left, right)
-			segTop := clamp(min(p0.Y, p1.Y)-margin, top, bottom)
-			segBottom := clamp(max(p0.Y, p1.Y)+margin, top, bottom)
-			for y := segTop; y <= segBottom; y++ {
-				for x := segLeft; x <= segRight; x++ {
-					if pointInsideArrowStroke(float64(x), float64(y), sx0, sy0, sx1, sy1, size) {
-						mask.setOpaque(x, y)
-					}
-				}
-			}
-		}
-	}
-	c.applyVectorAlphaMask(mask, clr)
-}
-
-// FillStyledArrowHead rasterizes the parity-aware 1:3 arrow head directly
-// into the native canvas. Each of the four polygon edges chooses AA from its own
-// angle: horizontal, vertical, and exact 45-degree edges stay binary, while all
-// other edges use 4x4 coverage. Thus a tan(1/3) arrow correctly gets one crisp
-// horizontal side and one antialiased tan(3/4) side.
-func (c *Canvas) FillStyledArrowHead(g ArrowHeadGeometry, antialias bool, clr uint32) {
-	minX := math.Min(g.Tip.X-g.TipHalfWidth, math.Min(g.SideA.X, g.SideB.X))
-	maxX := math.Max(g.Tip.X+g.TipHalfWidth, math.Max(g.SideA.X, g.SideB.X))
-	minY := math.Min(g.Tip.Y-g.TipHalfWidth, math.Min(g.SideA.Y, g.SideB.Y))
-	maxY := math.Max(g.Tip.Y+g.TipHalfWidth, math.Max(g.SideA.Y, g.SideB.Y))
-	left := clamp(int(math.Floor(minX))-1, 0, c.W-1)
-	right := clamp(int(math.Ceil(maxX))+1, 0, c.W-1)
-	top := clamp(int(math.Floor(minY))-1, 0, c.H-1)
-	bottom := clamp(int(math.Ceil(maxY))+1, 0, c.H-1)
-	if left > right || top > bottom {
-		return
-	}
-	for y := top; y <= bottom; y++ {
-		for x := left; x <= right; x++ {
-			coverage := arrowHeadCoverageAt(float64(x), float64(y), g, antialias)
-			if coverage <= 0 {
-				continue
-			}
-			if coverage >= 1 {
-				c.SetPixel(x, y, clr)
-			} else {
-				c.blendPixelCoverage(x, y, clr, coverage)
-			}
-		}
-	}
-}
-
-func cubicBezierPoint(p0, p1, p2, p3 int, t float64) int {
-	u := 1.0 - t
-	v := u*u*u*float64(p0) + 3*u*u*t*float64(p1) + 3*u*t*t*float64(p2) + t*t*t*float64(p3)
-	return int(math.Round(v))
-}
-
-func (c *Canvas) DrawBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1 int, clr uint32) {
-	distance := math.Hypot(float64(x1-x0), float64(y1-y0)) +
-		math.Hypot(float64(c1x-x0), float64(c1y-y0)) +
-		math.Hypot(float64(c2x-x1), float64(c2y-y1))
-	steps := int(distance * 2)
-	if steps < 48 {
-		steps = 48
-	}
-	if steps > 4096 {
-		steps = 4096
-	}
-	px, py := x0, y0
-	for i := 1; i <= steps; i++ {
-		t := float64(i) / float64(steps)
-		nx := cubicBezierPoint(x0, c1x, c2x, x1, t)
-		ny := cubicBezierPoint(y0, c1y, c2y, y1, t)
-		c.DrawLine(px, py, nx, ny, clr)
-		px, py = nx, ny
-	}
-}
-
-func quarticBezierPoint(p0, p1, p2, p3, p4 int, t float64) int {
-	u := 1.0 - t
-	v := u*u*u*u*float64(p0) + 4*u*u*u*t*float64(p1) + 6*u*u*t*t*float64(p2) + 4*u*t*t*t*float64(p3) + t*t*t*t*float64(p4)
-	return int(math.Round(v))
-}
-
-// bezierCoordinate evaluates a Bezier curve of any degree with de Casteljau's
-// algorithm. Curve stages use degree 1 through 5 progressively, so a bend
-// point that has not yet been chosen cannot influence the visible curve.
-func bezierCoordinate(values []int, t float64) int {
-	if len(values) == 0 {
-		return 0
-	}
-	work := make([]float64, len(values))
-	for i, v := range values {
-		work[i] = float64(v)
-	}
-	for n := len(work) - 1; n > 0; n-- {
-		for i := 0; i < n; i++ {
-			work[i] = work[i]*(1.0-t) + work[i+1]*t
-		}
-	}
-	return int(math.Round(work[0]))
-}
-
-func appendRasterSegment(points []PixelPoint, x0, y0, x1, y1 int) []PixelPoint {
-	dx := absInt(x1 - x0)
-	sx := -1
-	if x0 < x1 {
-		sx = 1
-	}
-	dy := -absInt(y1 - y0)
-	sy := -1
-	if y0 < y1 {
-		sy = 1
-	}
-	err := dx + dy
-	for {
-		if len(points) == 0 || points[len(points)-1].X != x0 || points[len(points)-1].Y != y0 {
-			points = append(points, PixelPoint{X: x0, Y: y0})
-		}
-		if x0 == x1 && y0 == y1 {
-			break
-		}
-		e2 := 2 * err
-		if e2 >= dy {
-			err += dy
-			x0 += sx
-		}
-		if e2 <= dx {
-			err += dx
-			y0 += sy
-		}
-	}
-	return points
-}
-
-// bezierRasterPath samples a Bezier curve and connects every sample with an
-// integer Bresenham segment. The resulting spine is shared by preview and
-// commit, including thick and anti-aliased curves.
-func bezierRasterPath(control []PixelPoint) []PixelPoint {
-	if len(control) < 2 {
-		return append([]PixelPoint(nil), control...)
-	}
-	distance := 0.0
-	for i := 1; i < len(control); i++ {
-		distance += math.Hypot(float64(control[i].X-control[i-1].X), float64(control[i].Y-control[i-1].Y))
-	}
-	steps := int(math.Ceil(distance * 2.0))
-	if steps < 48 {
-		steps = 48
-	}
-	if steps > 8192 {
-		steps = 8192
-	}
-	xs := make([]int, len(control))
-	ys := make([]int, len(control))
-	for i, p := range control {
-		xs[i], ys[i] = p.X, p.Y
-	}
-	path := make([]PixelPoint, 0, steps+1)
-	px, py := control[0].X, control[0].Y
-	path = append(path, PixelPoint{X: px, Y: py})
-	for i := 1; i <= steps; i++ {
-		t := float64(i) / float64(steps)
-		nx := bezierCoordinate(xs, t)
-		ny := bezierCoordinate(ys, t)
-		path = appendRasterSegment(path, px, py, nx, ny)
-		px, py = nx, ny
-	}
-	return path
-}
-
-// DrawQuarticBezier draws a smooth curve with three independently adjustable
-// control points. This gives dotPaint one more bend-adjustment stage than the
-// classic two-control-point curve tool.
-func (c *Canvas) DrawQuarticBezier(x0, y0, c1x, c1y, c2x, c2y, c3x, c3y, x1, y1 int, clr uint32) {
-	distance := math.Hypot(float64(x1-x0), float64(y1-y0)) +
-		math.Hypot(float64(c1x-x0), float64(c1y-y0)) +
-		math.Hypot(float64(c2x-c1x), float64(c2y-c1y)) +
-		math.Hypot(float64(c3x-c2x), float64(c3y-c2y)) +
-		math.Hypot(float64(x1-c3x), float64(y1-c3y))
-	steps := int(distance * 2)
-	if steps < 64 {
-		steps = 64
-	}
-	if steps > 8192 {
-		steps = 8192
-	}
-	px, py := x0, y0
-	for i := 1; i <= steps; i++ {
-		t := float64(i) / float64(steps)
-		nx := quarticBezierPoint(x0, c1x, c2x, c3x, x1, t)
-		ny := quarticBezierPoint(y0, c1y, c2y, c3y, y1, t)
-		c.DrawLine(px, py, nx, ny, clr)
-		px, py = nx, ny
-	}
-}
-
-func (c *Canvas) StampCircle(cx, cy, radius int, clr uint32) {
-	rr := radius * radius
-	for y := -radius; y <= radius; y++ {
-		for x := -radius; x <= radius; x++ {
-			if x*x+y*y <= rr {
-				c.SetPixel(cx+x, cy+y, clr)
-			}
-		}
-	}
-}
-
-func squareStampBounds(cx, cy, size int) (left, top, right, bottom int) {
-	if size < 1 {
-		size = 1
-	}
-	left = cx - (size-1)/2
-	top = cy - (size-1)/2
-	right = left + size
-	bottom = top + size
-	return
-}
-
-func (c *Canvas) StampSquare(cx, cy, size int, clr uint32) {
-	left, top, right, bottom := squareStampBounds(cx, cy, size)
-	for y := top; y < bottom; y++ {
-		for x := left; x < right; x++ {
-			c.SetPixel(x, y, clr)
-		}
-	}
-}
-
-func (c *Canvas) DrawBrushLine(x0, y0, x1, y1, radius int, clr uint32) {
-	dx := int(math.Abs(float64(x1 - x0)))
-	sx := -1
-	if x0 < x1 {
-		sx = 1
-	}
-	dy := -int(math.Abs(float64(y1 - y0)))
-	sy := -1
-	if y0 < y1 {
-		sy = 1
-	}
-	err := dx + dy
-	for {
-		c.StampCircle(x0, y0, radius, clr)
-		if x0 == x1 && y0 == y1 {
-			break
-		}
-		e2 := 2 * err
-		if e2 >= dy {
-			err += dy
-			x0 += sx
-		}
-		if e2 <= dx {
-			err += dx
-			y0 += sy
-		}
-	}
-}
-
-func (c *Canvas) DrawEraserLine(x0, y0, x1, y1, size int, clr uint32) {
-	dx := int(math.Abs(float64(x1 - x0)))
-	sx := -1
-	if x0 < x1 {
-		sx = 1
-	}
-	dy := -int(math.Abs(float64(y1 - y0)))
-	sy := -1
-	if y0 < y1 {
-		sy = 1
-	}
-	err := dx + dy
-	for {
-		c.StampSquare(x0, y0, size, clr)
-		if x0 == x1 && y0 == y1 {
-			break
-		}
-		e2 := 2 * err
-		if e2 >= dy {
-			err += dy
-			x0 += sx
-		}
-		if e2 <= dx {
-			err += dx
-			y0 += sy
-		}
-	}
-}
-
-func (c *Canvas) StampBrush(cx, cy, size int, shape BrushShape, clr uint32) {
-	if size < 1 {
-		size = 1
-	}
-	left, top, right, bottom := squareStampBounds(cx, cy, size)
-	switch shape {
-	case BrushCircle:
-		centerX := (float64(left) + float64(right-1)) / 2.0
-		centerY := (float64(top) + float64(bottom-1)) / 2.0
-		radius := float64(size) / 2.0
-		if radius < 0.5 {
-			radius = 0.5
-		}
-		for y := top; y < bottom; y++ {
-			for x := left; x < right; x++ {
-				dx := float64(x) - centerX
-				dy := float64(y) - centerY
-				if dx*dx+dy*dy <= radius*radius {
-					c.SetPixel(x, y, clr)
-				}
-			}
-		}
-	case BrushSlashUp, BrushSlashDown:
-		// A diagonal nib uses at least a 2×2 footprint and the same minimum band
-		// used from 9 px upward. This prevents the striped, detached appearance
-		// produced by a nominally one-pixel diagonal on curved strokes.
-		nibSize := diagonalBrushFootprintSize(size)
-		nibLeft, nibTop, _, _ := squareStampBounds(cx, cy, nibSize)
-		band := diagonalBrushBand(nibSize)
-		for y := 0; y < nibSize; y++ {
-			for x := 0; x < nibSize; x++ {
-				d := x - y
-				if shape == BrushSlashUp {
-					d = x + y - (nibSize - 1)
-				}
-				if absInt(d) <= band {
-					c.SetPixel(nibLeft+x, nibTop+y, clr)
-				}
-			}
-		}
-	default:
-		c.StampSquare(cx, cy, size, clr)
-	}
-}
-
-func (c *Canvas) DrawUnifiedBrushLine(x0, y0, x1, y1, size int, shape BrushShape, clr uint32) {
-	dx := absInt(x1 - x0)
-	sx := -1
-	if x0 < x1 {
-		sx = 1
-	}
-	dy := -absInt(y1 - y0)
-	sy := -1
-	if y0 < y1 {
-		sy = 1
-	}
-	err := dx + dy
-	for {
-		c.StampBrush(x0, y0, size, shape, clr)
-		if x0 == x1 && y0 == y1 {
-			break
-		}
-		e2 := 2 * err
-		if e2 >= dy {
-			err += dy
-			x0 += sx
-		}
-		if e2 <= dx {
-			err += dx
-			y0 += sy
-		}
-	}
-}
-
-// DrawRectOuter draws an unfilled rectangle whose drag coordinates are the
-// outside pixel bounds. Stroke thickness grows only inward, so changing the
-// width never expands the visible rectangle beyond the requested outer size.
-func (c *Canvas) DrawRectOuter(x0, y0, x1, y1, size int, clr uint32) {
-	if x0 > x1 {
-		x0, x1 = x1, x0
-	}
-	if y0 > y1 {
-		y0, y1 = y1, y0
-	}
-	x0 = clamp(x0, 0, c.W-1)
-	x1 = clamp(x1, 0, c.W-1)
-	y0 = clamp(y0, 0, c.H-1)
-	y1 = clamp(y1, 0, c.H-1)
-	w := x1 - x0 + 1
-	h := y1 - y0 + 1
-	if w <= 0 || h <= 0 {
-		return
-	}
-	size = clamp(size, 1, 40)
-	thickness := min(size, min(w, h))
-	for y := y0; y <= y1; y++ {
-		for x := x0; x <= x1; x++ {
-			if x-x0 < thickness || x1-x < thickness || y-y0 < thickness || y1-y < thickness {
-				c.SetPixel(x, y, clr)
-			}
-		}
-	}
-}
-
-func (c *Canvas) DrawRect(x0, y0, x1, y1 int, clr uint32) {
-	c.DrawRectOuter(x0, y0, x1, y1, 1, clr)
-}
-
-func (c *Canvas) DrawEllipseOuter(x0, y0, x1, y1, size int, clr uint32) {
-	if x0 > x1 {
-		x0, x1 = x1, x0
-	}
-	if y0 > y1 {
-		y0, y1 = y1, y0
-	}
-	x0 = clamp(x0, 0, c.W-1)
-	x1 = clamp(x1, 0, c.W-1)
-	y0 = clamp(y0, 0, c.H-1)
-	y1 = clamp(y1, 0, c.H-1)
-	w := x1 - x0 + 1
-	h := y1 - y0 + 1
-	if w <= 0 || h <= 0 {
-		return
-	}
-	size = clamp(size, 1, 40)
-	thickness := min(size, min(w, h))
-	if w <= 2 || h <= 2 {
-		c.DrawRectOuter(x0, y0, x1, y1, thickness, clr)
-		return
-	}
-
-	// A93: build the stroke as the exact difference of two concentric analytic
-	// ellipses and flatten cardinal tips on axes larger than 20px. The inner and
-	// outer boundaries use the same tiny symmetric cap, removing axis vertices
-	// without changing the requested bounds or the inward-only stroke thickness.
-	// Quadrant mirroring keeps left/right and top/bottom pixels exactly identical.
-	mask := symmetricEllipseRingMask(w, h, thickness)
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			if mask[y*w+x] {
-				c.SetPixel(x0+x, y0+y, clr)
-			}
-		}
-	}
-}
-
-func (c *Canvas) DrawEllipse(x0, y0, x1, y1 int, clr uint32) {
-	c.DrawEllipseOuter(x0, y0, x1, y1, 1, clr)
-}
-
-func (c *Canvas) FloodFill(x, y int, newColor uint32, tolerance int) bool {
-	started := time.Now()
-	tolerance = clampColorTolerance(tolerance)
-	logf("FILL begin x=%d y=%d new=%06X tolerance=%d canvas=%dx%d pix=%d", x, y, newColor&0xFFFFFF, tolerance, c.W, c.H, len(c.Pix))
-	replacement := colorrefToBGRA(newColor)
-	filled := toleranceFloodFillBGRA(c.Pix, c.W, c.H, x, y, replacement, tolerance)
-	logf("FILL end filled=%d tolerance=%d elapsed=%s", filled, tolerance, time.Since(started))
-	return filled > 0
-}
-
-func (c *Canvas) Invert() {
-	for i := 0; i < len(c.Pix); i += 4 {
-		c.Pix[i] = 255 - c.Pix[i]
-		c.Pix[i+1] = 255 - c.Pix[i+1]
-		c.Pix[i+2] = 255 - c.Pix[i+2]
-	}
-}
-
-func (c *Canvas) FlipHorizontal() {
-	for y := 0; y < c.H; y++ {
-		for x := 0; x < c.W/2; x++ {
-			a := (y*c.W + x) * 4
-			b := (y*c.W + (c.W - 1 - x)) * 4
-			for k := 0; k < 4; k++ {
-				c.Pix[a+k], c.Pix[b+k] = c.Pix[b+k], c.Pix[a+k]
-			}
-		}
-	}
-}
-
-func (c *Canvas) FlipVertical() {
-	row := c.W * 4
-	tmp := make([]byte, row)
-	for y := 0; y < c.H/2; y++ {
-		a := y * row
-		b := (c.H - 1 - y) * row
-		copy(tmp, c.Pix[a:a+row])
-		copy(c.Pix[a:a+row], c.Pix[b:b+row])
-		copy(c.Pix[b:b+row], tmp)
-	}
-}
-
-func (c *Canvas) ResizeNearest(nw, nh int, bg uint32) {
-	if nw < 1 || nh < 1 {
-		return
-	}
-	out := NewCanvas(nw, nh, bg)
-	for y := 0; y < nh; y++ {
-		sy := y * c.H / nh
-		for x := 0; x < nw; x++ {
-			sx := x * c.W / nw
-			si := (sy*c.W + sx) * 4
-			di := (y*nw + x) * 4
-			copy(out.Pix[di:di+4], c.Pix[si:si+4])
-		}
-	}
-	c.W, c.H, c.Pix = out.W, out.H, out.Pix
-}
-
-// ResizeCanvas changes only the canvas bounds. Existing pixels are copied
-// without scaling. offsetX/offsetY specify where the old top-left pixel is
-// placed in the new canvas, allowing all eight resize handles to crop or add
-// space from any side.
-func (c *Canvas) ResizeCanvas(nw, nh, offsetX, offsetY int, bg uint32) {
-	if nw < 1 || nh < 1 {
-		return
-	}
-	out := NewCanvas(nw, nh, bg)
-	for y := 0; y < c.H; y++ {
-		ny := y + offsetY
-		if ny < 0 || ny >= nh {
-			continue
-		}
-		for x := 0; x < c.W; x++ {
-			nx := x + offsetX
-			if nx < 0 || nx >= nw {
-				continue
-			}
-			si := (y*c.W + x) * 4
-			di := (ny*nw + nx) * 4
-			copy(out.Pix[di:di+4], c.Pix[si:si+4])
-		}
-	}
-	c.W, c.H, c.Pix = out.W, out.H, out.Pix
-}
-
 // --- Undo ------------------------------------------------------------------
 type Snapshot struct {
 	W, H int
@@ -2275,50 +1279,50 @@ type HistoryEntry struct {
 	RGBPalette                []uint32 // classic 28-colour slots, even in indexed mode
 	FG, BG                    uint32
 	CustomColors              [16]uint32
+	// Non-pixel curve edit checkpoints may share an unchanged canvas. Undo and
+	// redo must nevertheless visit every released baseline/bend separately.
+	Curve                       *CurveHistoryState
+	Objects                     []MovableObject // session-local editable shape/text sprites
+	ObjectsRevision             uint64
+	RasterMode                  bool // a mode transition is an undoable named document step
+	KeepObjects                 bool // restore the previous object creation preference
+	KeepObjectsBeforeRasterMode bool
+}
+
+// CurveHistoryState stores only a curve's geometry and rendering options;
+// pixels remain the uncommitted base canvas until the final bend is released.
+// Keeping this on named history entries lets Ctrl+Z, Ctrl+Y and the History
+// panel navigate editable bend stages without duplicating strokes on pixels.
+type CurveHistoryState struct {
+	Operation                              PaintOperation
+	Stage, BendCount                       int
+	X0, Y0, X1, Y1                         int
+	C1X, C1Y, C2X, C2Y, C3X, C3Y, C4X, C4Y int
+	Size                                   int
+	Antialias, DrawButtonRight             bool
+	PaintColor                             uint32
 }
 
 const (
-	historyLimit     = 40
-	historyByteLimit = 256 * 1024 * 1024
+	// 80 undo operations require 81 snapshots, including the initial state.
+	historyLimit = 81
+	// A Full-HD BGRA canvas needs about 8 MiB per unique snapshot.
+	// Allow 80 undo operations without silently truncating the chain at
+	// the previous 256 MiB budget, while retaining a bounded memory cap.
+	historyByteLimit = 768 * 1024 * 1024
 )
 
 // --- Tools -----------------------------------------------------------------
-type Tool int
-
-const (
-	ToolFreeSelect Tool = iota
-	ToolRectSelect
-	ToolColorRegionSelect
-	ToolColorAllSelect
-	ToolEraser
-	ToolFill
-	ToolEyedropper
-	ToolMagnifier
-	ToolPencil
-	ToolBrush
-	ToolAirbrush
-	ToolText
-	ToolLine
-	ToolCurve
-	ToolRectangle
-	ToolEllipse
-	ToolRightTriangle
-	ToolArrow
-)
-
-var toolNames = []string{
-	"자유 선택", "사각 선택", "색 영역 선택", "동일 색 전체 선택", "지우개", "색 채우기", "색 골라내기", "확대/축소", "붓", "붓(통합됨)", "에어브러시(통합됨)", "텍스트", "직선", "곡선", "사각형", "타원", "직각삼각형", "화살표",
-}
-
 // Pencil, brush, and airbrush are presented as one unified brush tool.  The
 // legacy ToolBrush and ToolAirbrush enum values remain only for source and log
 // compatibility; they are no longer shown as separate toolbox buttons.
 var visibleTools = []Tool{
 	ToolFreeSelect, ToolRectSelect,
 	ToolColorRegionSelect, ToolColorAllSelect,
+	ToolEyedropper, ToolObjectSelect,
 	ToolEraser, ToolFill,
-	ToolEyedropper, ToolMagnifier,
-	ToolPencil, ToolText,
+	ToolMagnifier, ToolPencil,
+	ToolText,
 	ToolLine, ToolCurve,
 	ToolRectangle, ToolEllipse,
 	ToolRightTriangle, ToolArrow,
@@ -2332,55 +1336,13 @@ func isSelectionTool(t Tool) bool {
 	return t == ToolFreeSelect || t == ToolRectSelect || isColorSelectionTool(t)
 }
 
-type BrushShape int
-
-const (
-	BrushSquare BrushShape = iota
-	BrushCircle
-	BrushSlashUp
-	BrushSlashDown
-)
-
 var brushShapeNames = []string{"네모", "동그라미", "우상향", "좌하향"}
 
-type LineConstraintMode int
-
-const (
-	LineConstraint15Degrees LineConstraintMode = iota
-	LineConstraintTanN
-)
-
 var lineConstraintNames = []string{"15×n˚", "tan n"}
-
-type LineTanRatio struct {
-	Rise int
-	Run  int
-}
-
-// Each tan-n direction is stored as an exact reduced integer ratio. The
-// rasterizer follows each ratio as a repeating one-pixel staircase rather
-// than distributing rounding error over the whole line. Thus tan 1/3 keeps
-// exactly three horizontal pixels per vertical step while partial prefixes can
-// still appear naturally at the live endpoint.
-var lineTanRatios = []LineTanRatio{
-	{Rise: 1, Run: 5},
-	{Rise: 1, Run: 4},
-	{Rise: 1, Run: 3},
-	{Rise: 1, Run: 2},
-	{Rise: 2, Run: 3},
-	{Rise: 1, Run: 1},
-	{Rise: 3, Run: 2},
-	{Rise: 2, Run: 1},
-	{Rise: 3, Run: 1},
-	{Rise: 4, Run: 1},
-	{Rise: 5, Run: 1},
-}
 
 var fallbackTextFontChoices = []string{"함초롬바탕", "함초롬돋움", "맑은 고딕", "굴림", "궁서", "Arial", "Times New Roman"}
 var textSizeChoices = []int{5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72}
 var textScriptChoices = []string{"없음", "한글", "숫자·기호", "영문"}
-
-type PixelPoint struct{ X, Y int }
 
 type ClipboardImage struct {
 	W, H int
@@ -2391,17 +1353,19 @@ type ClipboardImage struct {
 // ClipboardEntry is one item in dotPaint's six-slot clipboard history.
 // Pinned entries are never evicted by newer clipboard images.
 type ClipboardEntry struct {
-	Image  ClipboardImage
-	Hash   uint32
-	Pinned bool
-	Source string
-	Added  time.Time
+	EditableObjectData []byte // optional compressed, exact dotPaint object scene
+	Image              ClipboardImage
+	Hash               uint32
+	Pinned             bool
+	Source             string
+	Added              time.Time
 }
 
 type clipboardPinMeta struct {
-	File   string    `json:"file"`
-	Source string    `json:"source"`
-	Added  time.Time `json:"added"`
+	EditableFile string    `json:"editableFile,omitempty"`
+	File         string    `json:"file"`
+	Source       string    `json:"source"`
+	Added        time.Time `json:"added"`
 }
 
 type SelectionState struct {
@@ -2585,7 +1549,7 @@ const (
 	paletteCellColumns       = 22
 	paletteCellSize          = 24
 	palettePanelHeight       = 72
-	toolboxFloatingHeight    = 720
+	toolboxFloatingHeight    = 761
 	clipboardHistoryCapacity = 10
 	clipboardVisibleSlots    = 6
 	clipboardColumns         = 2
@@ -2603,14 +1567,6 @@ type PanelState struct {
 	DragOffsetY int
 }
 
-type TextCharStyle struct {
-	FontName  string
-	FontSize  int
-	Bold      bool
-	Italic    bool
-	Underline bool
-}
-
 // TextGlyphCluster is one visual glyph cluster as rasterized by the native GDI
 // text layout. Selection highlighting uses these exact advance rectangles rather
 // than rebuilding rectangles one UTF-16 code unit at a time. This prevents the
@@ -2623,10 +1579,6 @@ type TextGlyphCluster struct {
 	Y     int
 	W     int
 	Break bool
-}
-
-func (s TextCharStyle) Equal(other TextCharStyle) bool {
-	return s.FontName == other.FontName && s.FontSize == other.FontSize && s.Bold == other.Bold && s.Italic == other.Italic && s.Underline == other.Underline
 }
 
 type TextState struct {
@@ -2643,13 +1595,17 @@ type TextState struct {
 	Bold              bool
 	Italic            bool
 	Underline         bool
+	ScriptMode        int8
 	EditHwnd          uintptr
 	FontCombo         uintptr
 	SizeCombo         uintptr
+	SizeEditHwnd      uintptr
 	ScriptCombo       uintptr
 	BoldBtn           uintptr
 	ItalicBtn         uintptr
 	UnderlineBtn      uintptr
+	SuperscriptBtn    uintptr
+	SubscriptBtn      uintptr
 	UIFont            uintptr
 	LayoutHwnd        uintptr
 	LayoutFont        uintptr
@@ -2670,6 +1626,7 @@ type TextState struct {
 	LayoutLineHeights map[int]int
 	LayoutClusters    []TextGlyphCluster
 	Styles            []TextCharStyle
+	GlyphMaskMode     int // 0: styled colors; 1: all-white mask; 2: invert-glyph mask
 	// InsertionStyle is the PowerPoint-like style attached to a collapsed
 	// caret.  Choosing a font/size/B/I/U with no selected text arms this style
 	// at InsertionCaret. Merely returning focus to the same caret must not let
@@ -2709,7 +1666,10 @@ type TextState struct {
 	// accepted by the real EDIT.  Never block EN_CHANGE on full text layout.
 	PreviewTimerPending bool
 
-	ControlSync       bool
+	ControlSync bool
+	// A standalone Win32 EDIT owns numeric typing, independently of the
+	// dropdown LIST. Never overwrite its text/caret mid-input.
+	SizeEditPending   bool
 	LastSizeListIndex int
 	LastSizeApplyMS   int64
 	Selecting         bool
@@ -2730,6 +1690,15 @@ type TextState struct {
 
 // --- Main application ------------------------------------------------------
 type App struct {
+	fgOperation, bgOperation, drawOperation, curveOperation PaintOperation
+	invertStroke                                            InvertStroke
+	invertStrokeActive                                      bool
+	indexedInvertLUT                                        []byte
+	indexedInvertPaletteHash                                uint64
+	invertTooltipText                                       []uint16
+	invertTooltipAdded                                      bool
+	objectOutlineCache                                      map[objectOutlineKey]uintptr
+
 	hwnd      uintptr
 	hinst     uintptr
 	menu      uintptr
@@ -2827,11 +1796,14 @@ type App struct {
 	rightTriangleSize          int
 	adjustingRightTriangleSize bool
 
-	arrowHeadSize          int
-	arrowLineSize          int
-	arrowAntialias         bool
-	adjustingArrowLineSize bool
-	shapeShowCenter        bool
+	arrowHeadSize               int
+	arrowLineSize               int
+	arrowAntialias              bool
+	adjustingArrowLineSize      bool
+	shapeShowCenter             bool
+	keepObjects                 bool // new editable shapes/text remain independent; default true
+	rasterMode                  bool // global destructive pixel-only drawing mode
+	keepObjectsBeforeRasterMode bool // restore original object creation preference when leaving raster mode
 
 	textTool TextState
 
@@ -2888,8 +1860,37 @@ type App struct {
 	curveC3X, curveC3Y int
 	curveC4X, curveC4Y int
 	curveUndoPending   bool
+	curvePaintColor    uint32 // color at the start of the curve, independent of later palette picks
 
 	selection SelectionState
+
+	// Non-destructive movable objects. The raster canvas remains unchanged.
+	objects                                                          []MovableObject
+	objectsRevision                                                  uint64
+	objectSelected                                                   int          // -1 when no object is selected
+	objectMultiSelected                                              map[int]bool // ephemeral Shift-selection; group membership is in MovableObject
+	objectNextGroupID                                                uint64
+	objectIsolatedGroup                                              uint64 // double-click group to edit a single member
+	objectDragGroupStart                                             map[int]MovableObject
+	objectDragGroupBounds                                            ObjectBounds
+	objectOptionEditing                                              bool
+	objectOptionIndex                                                int
+	objectOptionStart                                                MovableObject
+	objectEditingIndex                                               int // -1 unless editing a saved text object
+	objectDragging                                                   bool
+	objectDragX, objectDragY                                         int
+	objectDragStartX, objectDragStartY                               int
+	objectDragStart                                                  MovableObject
+	objectDragHandle                                                 ObjectHandle
+	objectArmed                                                      uint8
+	objectContextPending                                             bool
+	objectContextX, objectContextY                                   int
+	objectTooltip                                                    uintptr
+	objectTooltipText                                                []uint16
+	objectTooltipLabel                                               string
+	objectTooltipRect                                                RECT
+	objectTooltipDark                                                bool
+	objectSelectMenu, objectSelectOpacityMenu, objectSelectOrderMenu uintptr
 
 	// A non-additive rectangular-selection press outside the current marquee is
 	// armed first. Releasing without a deliberate drag only cancels the old
@@ -3020,34 +2021,38 @@ func newApp() *App {
 		zoomLevels:  []int{1, 2, 4, 6, 8, 12, 15, 20},
 		zoomTarget:  8,
 		showToolbox: true, showPalette: true, showStatus: true, showClipboard: true, showHistory: true, opaque: false,
-		tool:                 ToolPencil,
-		eyedropperReturnTool: ToolPencil,
-		magnifierReturnTool:  ToolPencil,
-		eraserSize:           8,
-		brushSize:            1,
-		brushShape:           BrushSquare,
-		lineSize:             2,
-		lineConstraintMode:   LineConstraintTanN,
-		lineAntialias:        false,
-		curveBendCount:       2,
-		curveSize:            2,
-		curveAntialias:       false,
-		rectangleSize:        2,
-		ellipseSize:          2,
-		rightTriangleSize:    2,
-		arrowHeadSize:        0,
-		arrowLineSize:        2,
-		arrowAntialias:       false,
-		shapeShowCenter:      false,
-		colorTolerance:       0,
-		textTool:             TextState{FontName: defaultTextFontName(), FontSize: 20, Script: defaultTextScript(), Opaque: false},
-		clipboardPanel:       PanelState{W: rightPanelWidth, H: 244, Docked: true, DockStage: 2, DockOrder: 1},
-		historyPanel:         PanelState{W: rightPanelWidth, H: 308, Docked: true, DockStage: 2, DockOrder: 2},
-		textPanel:            PanelState{W: rightPanelWidth, H: 126, Docked: true, DockStage: 2, DockOrder: 3},
-		thumbnailPanel:       PanelState{W: rightPanelWidth, H: 190, Docked: true, DockStage: 2, DockOrder: 4},
-		toolboxPanel:         PanelState{W: toolboxWidth, H: toolboxFloatingHeight, Docked: true, DockStage: 2},
-		palettePanel:         PanelState{W: palettePanelWidth(), H: palettePanelHeight, Docked: true, DockStage: 2},
-		paletteDisplayRGB:    44, paletteDisplay16: 16, paletteDisplay256: 256,
+		tool:                        ToolPencil,
+		objectSelected:              -1,
+		objectEditingIndex:          -1,
+		eyedropperReturnTool:        ToolPencil,
+		magnifierReturnTool:         ToolPencil,
+		eraserSize:                  8,
+		brushSize:                   1,
+		brushShape:                  BrushSquare,
+		lineSize:                    2,
+		lineConstraintMode:          LineConstraintTanN,
+		lineAntialias:               false,
+		curveBendCount:              2,
+		curveSize:                   2,
+		curveAntialias:              false,
+		rectangleSize:               2,
+		ellipseSize:                 2,
+		rightTriangleSize:           2,
+		arrowHeadSize:               0,
+		arrowLineSize:               2,
+		arrowAntialias:              false,
+		shapeShowCenter:             false,
+		keepObjects:                 true,
+		keepObjectsBeforeRasterMode: true,
+		colorTolerance:              0,
+		textTool:                    TextState{FontName: defaultTextFontName(), FontSize: 20, Script: defaultTextScript(), Opaque: false},
+		clipboardPanel:              PanelState{W: rightPanelWidth, H: 244, Docked: true, DockStage: 2, DockOrder: 1},
+		historyPanel:                PanelState{W: rightPanelWidth, H: 308, Docked: true, DockStage: 2, DockOrder: 2},
+		textPanel:                   PanelState{W: rightPanelWidth, H: 126, Docked: true, DockStage: 2, DockOrder: 3},
+		thumbnailPanel:              PanelState{W: rightPanelWidth, H: 190, Docked: true, DockStage: 2, DockOrder: 4},
+		toolboxPanel:                PanelState{W: toolboxWidth, H: toolboxFloatingHeight, Docked: true, DockStage: 2},
+		palettePanel:                PanelState{W: palettePanelWidth(), H: palettePanelHeight, Docked: true, DockStage: 2},
+		paletteDisplayRGB:           44, paletteDisplay16: 16, paletteDisplay256: 256,
 		panelDockSerial: 4,
 		showTextPanel:   false,
 		fg:              rgb(0, 0, 0), bg: rgb(255, 255, 255),
@@ -3076,9 +2081,56 @@ func historyMatchesCanvas(e HistoryEntry, c *Canvas) bool {
 	return e.W == c.W && e.H == c.H && bytes.Equal(e.Pix, c.Pix)
 }
 
+func (a *App) curveCheckpoint() *CurveHistoryState {
+	if !a.curveUndoPending || a.curveStage <= 0 {
+		return nil
+	}
+	return &CurveHistoryState{
+		Stage: a.curveStage, BendCount: a.curveBendCount,
+		X0: a.curveX0, Y0: a.curveY0, X1: a.curveX1, Y1: a.curveY1,
+		C1X: a.curveC1X, C1Y: a.curveC1Y, C2X: a.curveC2X, C2Y: a.curveC2Y,
+		C3X: a.curveC3X, C3Y: a.curveC3Y, C4X: a.curveC4X, C4Y: a.curveC4Y,
+		Size: a.curveSize, Antialias: a.curveAntialias,
+		DrawButtonRight: a.drawButtonRight, PaintColor: a.curvePaintColor, Operation: a.curveOperation,
+	}
+}
+
+func (a *App) restoreCurveCheckpoint(c *CurveHistoryState) {
+	// Navigation to a committed or unrelated edit must remove any live preview.
+	a.curveStage, a.curveUndoPending = 0, false
+	a.curveBaseShiftConstrained = false
+	a.preview, a.drawing = false, false
+	if c == nil {
+		return
+	}
+	a.tool = ToolCurve
+	a.curveStage, a.curveBendCount = c.Stage, c.BendCount
+	a.curveX0, a.curveY0, a.curveX1, a.curveY1 = c.X0, c.Y0, c.X1, c.Y1
+	a.curveC1X, a.curveC1Y, a.curveC2X, a.curveC2Y = c.C1X, c.C1Y, c.C2X, c.C2Y
+	a.curveC3X, a.curveC3Y, a.curveC4X, a.curveC4Y = c.C3X, c.C3Y, c.C4X, c.C4Y
+	a.curveSize, a.curveAntialias = c.Size, c.Antialias
+	a.drawButtonRight, a.curvePaintColor = c.DrawButtonRight, c.PaintColor
+	a.curveOperation = c.Operation
+	a.curveUndoPending, a.preview = true, true
+	// Escape/early completion expects a matching temporary baseline snapshot.
+	a.undo.Push(a.canvas)
+}
+
 func (a *App) makeHistorySnapshot(name string) HistoryEntry {
-	e := historySnapshot(a.canvas, name)
+	e := HistoryEntry{Name: name, At: time.Now(), W: a.canvas.W, H: a.canvas.H}
+	// Object-only changes leave the underlying pixels untouched. Share their
+	// immutable existing history bitmap, rather than cloning megabytes every
+	// time an object is dragged or text/shape object is added.
+	if (strings.HasPrefix(name, "객체") || strings.HasSuffix(name, " 객체") || name == "텍스트 객체 편집") && a.historyIndex >= 0 && a.historyIndex < len(a.historyEntries) && historyMatchesCanvas(a.historyEntries[a.historyIndex], a.canvas) {
+		e.Pix = a.historyEntries[a.historyIndex].Pix
+	} else {
+		e.Pix = a.canvas.ClonePixels()
+	}
 	e.FG, e.BG, e.CustomColors = a.fg, a.bg, a.customColors
+	e.Curve = a.curveCheckpoint()
+	e.Objects = copyObjects(a.objects)
+	e.ObjectsRevision = a.objectsRevision
+	e.RasterMode, e.KeepObjects, e.KeepObjectsBeforeRasterMode = a.rasterMode, a.keepObjects, a.keepObjectsBeforeRasterMode
 	if len(a.standardPalette) == 28 {
 		e.RGBPalette = append([]uint32(nil), a.standardPalette...)
 	} else if len(a.palette) == 28 {
@@ -3094,7 +2146,9 @@ func (a *App) makeHistorySnapshot(name string) HistoryEntry {
 	return e
 }
 func (a *App) historyMatchesApp(e HistoryEntry) bool {
-	if !historyMatchesCanvas(e, a.canvas) {
+	if !historyMatchesCanvas(e, a.canvas) || e.ObjectsRevision != a.objectsRevision ||
+		e.RasterMode != a.rasterMode || e.KeepObjects != a.keepObjects ||
+		e.KeepObjectsBeforeRasterMode != a.keepObjectsBeforeRasterMode {
 		return false
 	}
 	if a.dejavu != nil {
@@ -3147,7 +2201,12 @@ func (a *App) ensureHistoryIndexVisible() {
 	a.historyScroll = clamp(a.historyScroll, 0, maxScroll)
 }
 
-func (a *App) recordHistory(name string) {
+func (a *App) recordHistory(name string) { a.recordHistoryStep(name, false) }
+
+// A released curve bend is an undoable edit even though its non-destructive
+// preview does not yet modify canvas.Pix. Explicit curve checkpoints bypass
+// the usual pixel-equality deduplication; ordinary operations do not.
+func (a *App) recordHistoryStep(name string, force bool) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "작업"
@@ -3155,7 +2214,7 @@ func (a *App) recordHistory(name string) {
 	if len(a.historyEntries) == 0 {
 		a.resetHistory("시작")
 	}
-	if a.historyIndex >= 0 && a.historyIndex < len(a.historyEntries) && a.historyMatchesApp(a.historyEntries[a.historyIndex]) {
+	if !force && a.historyIndex >= 0 && a.historyIndex < len(a.historyEntries) && a.historyMatchesApp(a.historyEntries[a.historyIndex]) {
 		// No pixel or size change. Keep the existing state instead of creating a
 		// duplicate row from a click-only or canceled operation.
 		return
@@ -3168,9 +2227,34 @@ func (a *App) recordHistory(name string) {
 		a.historyEntries = a.historyEntries[1:]
 	}
 	for len(a.historyEntries) > 2 {
+		// Immutable object sprites and unchanged base-canvas snapshots can be
+		// referenced by several history entries. Count physical backing pixel
+		// buffers only once, otherwise several object moves would exhaust the
+		// bounded history budget without actually using the memory.
+		seen := make(map[*byte]bool)
 		total := 0
+		addBytes := func(b []byte) {
+			if len(b) == 0 {
+				return
+			}
+			ptr := &b[0]
+			if !seen[ptr] {
+				total += len(b)
+				seen[ptr] = true
+			}
+		}
 		for _, e := range a.historyEntries {
-			total += len(e.Pix) + len(e.IndexedPixels) + len(e.IndexedPalette)*4 + len(e.RGBPalette)*4
+			addBytes(e.Pix)
+			addBytes(e.IndexedPixels)
+			total += len(e.IndexedPalette)*4 + len(e.RGBPalette)*4
+			for _, o := range e.Objects {
+				addBytes(o.Pix)
+				addBytes(o.ReplaceMask)
+				if len(o.Path) > 0 {
+					addBytes(unsafe.Slice((*byte)(unsafe.Pointer(&o.Path[0])), len(o.Path)*int(unsafe.Sizeof(ObjectPoint{}))))
+				}
+				total += len(o.Styles)*96 + len(o.Text) + len(o.FontName) + 96
+			}
 		}
 		if total <= historyByteLimit {
 			break
@@ -3190,15 +2274,37 @@ func (a *App) recordHistory(name string) {
 }
 
 func (a *App) gotoHistory(index int) bool {
+	a.cancelInverseStroke()
+	if a.objectDragging {
+		a.endObjectMove(0, 0, false)
+	}
+	a.objectArmed = 0
 	if index < 0 || index >= len(a.historyEntries) || index == a.historyIndex {
 		return false
 	}
 	e := a.historyEntries[index]
+	// Release an in-progress mouse drag before restoring an older curve stage.
+	if a.drawing && a.tool == ToolCurve {
+		procReleaseCapture.Call()
+	}
 	a.clearSelectionState()
+	a.objects = copyObjects(e.Objects)
+	a.objectsRevision = e.ObjectsRevision
+	a.rasterMode = e.RasterMode
+	a.keepObjects = e.KeepObjects
+	a.keepObjectsBeforeRasterMode = e.KeepObjectsBeforeRasterMode
+	a.clearObjectSelection()
+	a.objectEditingIndex = -1
+	a.objectDragging = false
+	a.objectArmed = 0
+	a.objectContextPending = false
 	a.canvas.W, a.canvas.H = e.W, e.H
 	a.canvas.Pix = append([]byte(nil), e.Pix...)
 	if a.dejavu == nil {
-		a.fg, a.bg, a.customColors = e.FG, e.BG, e.CustomColors
+		// Foreground/background swatches and the color-editor custom slots are
+		// active tool preferences, NOT drawing history. An undone stroke should
+		// be immediately repeatable with the color the user just selected.
+		// Indexed/RGB palette data still follows the historical document state.
 		a.standardPalette = append([]uint32(nil), e.RGBPalette...)
 		a.indexedPixelIndices = append([]byte(nil), e.IndexedPixels...)
 		a.indexedMode = e.IndexedMode
@@ -3233,11 +2339,13 @@ func (a *App) gotoHistory(index int) bool {
 	// The low-level undo stack may contain temporary pre-operation snapshots
 	// from a different branch. Reset it after direct history navigation.
 	a.undo.Reset()
+	a.restoreCurveCheckpoint(e.Curve)
 	a.dirty = true
 	a.updateTitle()
 	a.updateScrollbars()
 	if a.hwnd != 0 && a.dejavu == nil {
 		a.rebuildMenuForTheme()
+		a.refreshRasterModeUI() // also refresh the checked menu item on Undo/Redo/history navigation
 	}
 	a.statusText = fmt.Sprintf("히스토리 %d/%d: %s", index+1, len(a.historyEntries), e.Name)
 	logf("HISTORY goto index=%d count=%d name=%q", index, len(a.historyEntries), e.Name)
@@ -3246,8 +2354,27 @@ func (a *App) gotoHistory(index int) bool {
 	return true
 }
 
-func (a *App) historyUndo() bool { return a.gotoHistory(a.historyIndex - 1) }
-func (a *App) historyRedo() bool { return a.gotoHistory(a.historyIndex + 1) }
+func (a *App) historyUndo() bool {
+	if a.objectDragging {
+		a.endObjectMove(0, 0, false)
+		return true
+	}
+	// The first undo during an unfinished baseline drag cancels that preview,
+	// not the preceding unrelated completed drawing.
+	if a.curveUndoPending && a.curveStage == 0 {
+		a.cancelCurve(true)
+		invalidate(a.hwnd)
+		return true
+	}
+	return a.gotoHistory(a.historyIndex - 1)
+}
+func (a *App) historyRedo() bool {
+	if a.objectDragging {
+		a.endObjectMove(0, 0, false)
+		return true
+	}
+	return a.gotoHistory(a.historyIndex + 1)
+}
 
 func (a *App) drawHistoryName(tool Tool) string {
 	switch tool {
@@ -3536,8 +2663,13 @@ func (a *App) textToolbarVisible() bool {
 	return a.tool == ToolText && a.showTextPanel && !a.bitmapView
 }
 
+func (a *App) textToolbarControlHandles() []uintptr {
+	return []uintptr{a.textTool.FontCombo, a.textTool.SizeCombo, a.textTool.SizeEditHwnd, a.textTool.ScriptCombo,
+		a.textTool.BoldBtn, a.textTool.ItalicBtn, a.textTool.UnderlineBtn,
+		a.textTool.SuperscriptBtn, a.textTool.SubscriptBtn}
+}
 func (a *App) hideTextToolbarControls() {
-	for _, h := range []uintptr{a.textTool.FontCombo, a.textTool.SizeCombo, a.textTool.ScriptCombo, a.textTool.BoldBtn, a.textTool.ItalicBtn, a.textTool.UnderlineBtn} {
+	for _, h := range a.textToolbarControlHandles() {
 		if h != 0 {
 			procShowWindow.Call(h, SW_HIDE)
 		}
@@ -3551,6 +2683,11 @@ func (a *App) hideTextControls() {
 	}
 }
 
+// A1780: A native CBS_DROPDOWNLIST must NEVER overlap the EDIT hit target.
+// Win32 combo child/window z-order and native click routing can cover a sibling
+// EDIT even if the EDIT is painted over the combo. This used to divert every
+// attempted digit to CBN_SELCHANGE selecting the first list entry (5 pt).
+// The preview caption begins at panel X+119, so keep both controls to its left.
 func (a *App) ensureTextControls() {
 	if a.hwnd == 0 || a.textTool.EditHwnd != 0 {
 		return
@@ -3559,13 +2696,20 @@ func (a *App) ensureTextControls() {
 		hwndCtl, _, _ := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(utf16Ptr(class))), uintptr(unsafe.Pointer(utf16Ptr(title))), style, uintptr(x), uintptr(y), uintptr(w), uintptr(h), a.hwnd, uintptr(id), a.hinst, 0)
 		return hwndCtl
 	}
-	a.textTool.EditHwnd = mk("EDIT", "", WS_CHILD|WS_TABSTOP|WS_VSCROLL|ES_MULTILINE|ES_AUTOVSCROLL|ES_AUTOHSCROLL, 0, 0, 100, 60, ID_TEXT_EDITBOX)
+	a.textTool.EditHwnd = mk("EDIT", "", WS_CHILD|WS_TABSTOP|WS_VSCROLL|ES_MULTILINE|ES_NOHIDESEL|ES_AUTOVSCROLL|ES_AUTOHSCROLL, 0, 0, 100, 60, ID_TEXT_EDITBOX)
 	a.textTool.FontCombo = mk("COMBOBOX", "", WS_CHILD|WS_TABSTOP|WS_VSCROLL|CBS_DROPDOWNLIST|CBS_HASSTRINGS|CBS_OWNERDRAWFIXED|CBS_NOINTEGRALHEIGHT, 0, 0, 190, 460, ID_TEXT_FONTCOMBO)
-	a.textTool.SizeCombo = mk("COMBOBOX", "", WS_CHILD|WS_TABSTOP|WS_VSCROLL|CBS_DROPDOWN|CBS_HASSTRINGS|CBS_NOINTEGRALHEIGHT, 0, 0, 72, 330, ID_TEXT_SIZECOMBO)
+	// Numeric input and the dropdown button are two *non-overlapping* sibling
+	// windows. The 1.3.14 overlay was not reliably hit-testable on Windows 11:
+	// attempted typing repeatedly selected the combo's 5pt item instead.
+	a.textTool.SizeCombo = mk("COMBOBOX", "", WS_CHILD|WS_TABSTOP|WS_VSCROLL|CBS_DROPDOWNLIST|CBS_HASSTRINGS|CBS_NOINTEGRALHEIGHT, 0, 0, textSizeArrowWidth, 330, ID_TEXT_SIZECOMBO)
+	a.textTool.SizeEditHwnd = mk("EDIT", "", WS_CHILD|WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL, 0, 0, textSizeEntryWidth, 25, ID_TEXT_SIZEEDIT)
+	logf("TEXT_UI size control create edit=%#x combo=%#x disjoint=%v", a.textTool.SizeEditHwnd, a.textTool.SizeCombo, textSizeEntryOffsetX+textSizeEntryWidth <= textSizeArrowOffsetX)
 	a.textTool.ScriptCombo = mk("COMBOBOX", "", WS_CHILD|WS_TABSTOP|WS_VSCROLL|CBS_DROPDOWNLIST|CBS_HASSTRINGS|CBS_NOINTEGRALHEIGHT, 0, 0, 112, 240, ID_TEXT_SCRIPTCOMBO)
 	a.textTool.BoldBtn = mk("BUTTON", "B", WS_CHILD|WS_TABSTOP|BS_OWNERDRAW, 0, 0, 26, 24, ID_TEXT_BOLD)
 	a.textTool.ItalicBtn = mk("BUTTON", "I", WS_CHILD|WS_TABSTOP|BS_OWNERDRAW, 0, 0, 26, 24, ID_TEXT_ITALIC)
 	a.textTool.UnderlineBtn = mk("BUTTON", "U", WS_CHILD|WS_TABSTOP|BS_OWNERDRAW, 0, 0, 26, 24, ID_TEXT_UNDERLINE)
+	a.textTool.SuperscriptBtn = mk("BUTTON", "aᵃ", WS_CHILD|WS_TABSTOP|BS_OWNERDRAW, 0, 0, 26, 24, ID_TEXT_SUPERSCRIPT)
+	a.textTool.SubscriptBtn = mk("BUTTON", "aₐ", WS_CHILD|WS_TABSTOP|BS_OWNERDRAW, 0, 0, 26, 24, ID_TEXT_SUBSCRIPT)
 	// The hidden layout control is a Rich Edit 4.1 engine.  The visible/input
 	// control remains a one-pixel plain EDIT for reliable Korean IME input,
 	// while Rich Edit supplies mixed-font layout, hit testing, and final raster
@@ -3578,8 +2722,7 @@ func (a *App) ensureTextControls() {
 	} else {
 		logf("TEXT RichEdit load failed: %v", err)
 	}
-	themeWindowHandles(a.darkMode, a.textTool.FontCombo, a.textTool.SizeCombo, a.textTool.ScriptCombo,
-		a.textTool.BoldBtn, a.textTool.ItalicBtn, a.textTool.UnderlineBtn)
+	themeWindowHandles(a.darkMode, a.textToolbarControlHandles()...)
 	a.textTool.LayoutHwnd = mk(layoutClass, "", WS_CHILD|ES_MULTILINE|ES_NOHIDESEL|ES_AUTOVSCROLL, 0, 0, 100, 60, ID_TEXT_LAYOUTBOX)
 	if a.textTool.LayoutHwnd == 0 && a.textTool.LayoutRich {
 		a.textTool.LayoutRich = false
@@ -3644,7 +2787,9 @@ func (a *App) ensureTextControls() {
 	sendMessage(a.textTool.SizeCombo, CB_SETDROPPEDWIDTH, 92, 0)
 	sendMessage(a.textTool.ScriptCombo, CB_SETDROPPEDWIDTH, 132, 0)
 	a.syncTextStyleButtons()
-	procSetWindowTextW.Call(a.textTool.SizeCombo, uintptr(unsafe.Pointer(utf16Ptr(fmt.Sprintf("%d", a.textTool.FontSize)))))
+	a.textTool.ControlSync = true
+	procSetWindowTextW.Call(a.textTool.SizeEditHwnd, uintptr(unsafe.Pointer(utf16Ptr(fmt.Sprintf("%d", a.textTool.FontSize)))))
+	a.textTool.ControlSync = false
 	a.updateTextFontUI()
 	a.hideTextControls()
 }
@@ -3658,6 +2803,18 @@ func (a *App) syncTextStyleButtons() {
 	}
 	if a.textTool.UnderlineBtn != 0 {
 		sendMessage(a.textTool.UnderlineBtn, BM_SETCHECK, uintptr(map[bool]int{false: BST_UNCHECKED, true: BST_CHECKED}[a.textTool.Underline]), 0)
+	}
+	if a.textTool.SuperscriptBtn != 0 {
+		sendMessage(a.textTool.SuperscriptBtn, BM_SETCHECK, uintptr(map[bool]int{false: BST_UNCHECKED, true: BST_CHECKED}[a.textTool.ScriptMode == 1]), 0)
+	}
+	if a.textTool.SubscriptBtn != 0 {
+		sendMessage(a.textTool.SubscriptBtn, BM_SETCHECK, uintptr(map[bool]int{false: BST_UNCHECKED, true: BST_CHECKED}[a.textTool.ScriptMode == -1]), 0)
+	}
+	// Owner-drawn push buttons do not always repaint on BM_SETCHECK.
+	for _, h := range []uintptr{a.textTool.BoldBtn, a.textTool.ItalicBtn, a.textTool.UnderlineBtn, a.textTool.SuperscriptBtn, a.textTool.SubscriptBtn} {
+		if h != 0 {
+			procInvalidateRect.Call(h, 0, 1)
+		}
 	}
 }
 
@@ -3701,15 +2858,28 @@ func (a *App) updateTextUILayout(client RECT) {
 		px := int(panel.Left)
 		py := int(panel.Top)
 		procMoveWindow.Call(a.textTool.FontCombo, uintptr(px+48), uintptr(py+19), 182, 460, 1)
-		procMoveWindow.Call(a.textTool.SizeCombo, uintptr(px+48), uintptr(py+56), 62, 330, 1)
+		// The native combobox is just the 21px dropdown button. Its list opens
+		// to a 92px popup; it must not cover the separately editable number box.
+		procMoveWindow.Call(a.textTool.SizeCombo, uintptr(px+textSizeArrowOffsetX), uintptr(py+textSizeControlsY), textSizeArrowWidth, 330, 1)
+		procMoveWindow.Call(a.textTool.SizeEditHwnd, uintptr(px+textSizeEntryOffsetX), uintptr(py+textSizeControlsY), textSizeEntryWidth, 25, 1)
 		procMoveWindow.Call(a.textTool.ScriptCombo, uintptr(px+155), uintptr(py+56), 75, 240, 1)
-		procMoveWindow.Call(a.textTool.BoldBtn, uintptr(px+48), uintptr(py+94), 32, 27, 1)
-		procMoveWindow.Call(a.textTool.ItalicBtn, uintptr(px+85), uintptr(py+94), 32, 27, 1)
-		procMoveWindow.Call(a.textTool.UnderlineBtn, uintptr(px+122), uintptr(py+94), 32, 27, 1)
-		for _, h := range []uintptr{a.textTool.FontCombo, a.textTool.SizeCombo, a.textTool.ScriptCombo, a.textTool.BoldBtn, a.textTool.ItalicBtn, a.textTool.UnderlineBtn} {
+		// Five buttons, 31x26 (one pixel smaller than the original 32x27).
+		for i, h := range []uintptr{a.textTool.BoldBtn, a.textTool.ItalicBtn, a.textTool.UnderlineBtn, a.textTool.SuperscriptBtn, a.textTool.SubscriptBtn} {
+			if h != 0 {
+				procMoveWindow.Call(h, uintptr(px+48+i*35), uintptr(py+94), 31, 26, 1)
+			}
+		}
+		for _, h := range a.textToolbarControlHandles() {
 			if h != 0 {
 				procShowWindow.Call(h, SW_SHOW)
 			}
+		}
+		// Explicitly place the numeric editor above any painting/UI siblings;
+		// HWND_TOP (0), no activation or movement. Separate rectangles are the
+		// primary fix, this is an additional native z-order safety net.
+		if a.textTool.SizeEditHwnd != 0 {
+			procSetWindowPos.Call(a.textTool.SizeEditHwnd, 0, 0, 0, 0, 0,
+				SWP_NOMOVE|SWP_NOSIZE|0x0010)
 		}
 	}
 	if a.textTool.LayoutHwnd != 0 {
@@ -3797,7 +2967,7 @@ func makeEditPointParam(x, y int) uintptr {
 }
 
 func (a *App) currentTextStyle() TextCharStyle {
-	return TextCharStyle{FontName: a.textTool.FontName, FontSize: a.textTool.FontSize, Bold: a.textTool.Bold, Italic: a.textTool.Italic, Underline: a.textTool.Underline}
+	return TextCharStyle{FontName: a.textTool.FontName, FontSize: a.textTool.FontSize, Bold: a.textTool.Bold, Italic: a.textTool.Italic, Underline: a.textTool.Underline, ScriptMode: a.textTool.ScriptMode, Color: a.fg, ColorSet: true, ColorOp: a.chosenOperation(false)}
 }
 
 func (a *App) activeTextInsertionStyle() TextCharStyle {
@@ -3842,6 +3012,11 @@ func (a *App) setTextToolbarStyle(style TextCharStyle) {
 	a.textTool.Bold = style.Bold
 	a.textTool.Italic = style.Italic
 	a.textTool.Underline = style.Underline
+	a.textTool.ScriptMode = style.ScriptMode
+	if style.ColorSet {
+		a.fg = style.Color
+		a.fgOperation = paintMode(style.ColorOp, style.Color)
+	}
 	a.syncTextToolbarControls()
 	a.updateTextFontUI()
 }
@@ -4302,7 +3477,7 @@ func (a *App) textRenderDPI() int {
 	return 96
 }
 
-func makeTextCharFormat(style TextCharStyle, color uint32, dpi int) CHARFORMATW {
+func makeTextCharFormat(style TextCharStyle, color uint32, dpi int) CHARFORMAT2W {
 	if style.FontSize < 1 {
 		style.FontSize = 1
 	}
@@ -4317,13 +3492,13 @@ func makeTextCharFormat(style TextCharStyle, color uint32, dpi int) CHARFORMATW 
 	// Convert the canvas-native pixel height back to twips so a 150% Windows
 	// display does not make committed text 1.5 times larger than at 100%.
 	yHeightTwips := max(1, int(math.Round(float64(canvasPixels)*1440.0/float64(dpi))))
-	cf := CHARFORMATW{
-		CbSize:      uint32(unsafe.Sizeof(CHARFORMATW{})),
-		DwMask:      CFM_FACE | CFM_SIZE | CFM_COLOR | CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE,
+	cf := CHARFORMAT2W{CHARFORMATW: CHARFORMATW{
+		CbSize:      uint32(unsafe.Sizeof(CHARFORMAT2W{})),
+		DwMask:      CFM_FACE | CFM_SIZE | CFM_COLOR | CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE | CFM_SUBSCRIPT,
 		YHeight:     int32(yHeightTwips),
 		CrTextColor: color,
 		BCharSet:    DEFAULT_CHARSET,
-	}
+	}}
 	if style.Bold {
 		cf.DwEffects |= CFE_BOLD
 	}
@@ -4332,6 +3507,12 @@ func makeTextCharFormat(style TextCharStyle, color uint32, dpi int) CHARFORMATW 
 	}
 	if style.Underline {
 		cf.DwEffects |= CFE_UNDERLINE
+	}
+	if style.ScriptMode == 1 {
+		cf.DwEffects |= CFE_SUPERSCRIPT
+	}
+	if style.ScriptMode == -1 {
+		cf.DwEffects |= CFE_SUBSCRIPT
 	}
 	face := utf16.Encode([]rune(style.FontName))
 	if len(face) > len(cf.SzFaceName)-1 {
@@ -4517,7 +3698,7 @@ func (a *App) syncTextLayoutControlAtDPI(dpi int) int {
 			for end < richUnits && richStyles[end].Equal(style) {
 				end++
 			}
-			setRichCharFormat(a.textTool.LayoutHwnd, start, end, style, a.fg, dpi)
+			setRichCharFormat(a.textTool.LayoutHwnd, start, end, style, textStyleDisplayColor(style, a.fg), dpi)
 			start = end
 		}
 
@@ -4528,7 +3709,7 @@ func (a *App) syncTextLayoutControlAtDPI(dpi int) int {
 		// Match the final real character instead. The collapsed caret receives its
 		// independent insertion format below, without mutating the sentinel.
 		sentinelStyle := textLayoutSentinelStyle(richStyles, base, a.activeTextInsertionStyle(), a.textTool.InsertionStyleActive)
-		setRichCharFormat(a.textTool.LayoutHwnd, richUnits, richUnits+1, sentinelStyle, a.fg, dpi)
+		setRichCharFormat(a.textTool.LayoutHwnd, richUnits, richUnits+1, sentinelStyle, textStyleDisplayColor(sentinelStyle, a.fg), dpi)
 
 		// Character-format changes can force Rich Edit to rebuild its display
 		// metrics, so reassert the DPI compensation before reading boundaries.
@@ -4568,11 +3749,15 @@ func (a *App) syncTextToolbarControls() {
 	if fontIndex >= 0 {
 		sendMessage(a.textTool.FontCombo, CB_SETCURSEL, uintptr(fontIndex), 0)
 	}
-	procSetWindowTextW.Call(a.textTool.SizeCombo, uintptr(unsafe.Pointer(utf16Ptr(strconv.Itoa(a.textTool.FontSize)))))
-	for i, sz := range textSizeChoices {
-		if sz == a.textTool.FontSize {
-			sendMessage(a.textTool.SizeCombo, CB_SETCURSEL, uintptr(i), 0)
-			break
+	// A1758: Do not destroy the partially typed numeric string or reset the
+	// embedded EDIT selection while the user enters a multi-digit size.
+	if !a.textTool.SizeEditPending {
+		procSetWindowTextW.Call(a.textTool.SizeEditHwnd, uintptr(unsafe.Pointer(utf16Ptr(strconv.Itoa(a.textTool.FontSize)))))
+		for i, sz := range textSizeChoices {
+			if sz == a.textTool.FontSize {
+				sendMessage(a.textTool.SizeCombo, CB_SETCURSEL, uintptr(i), 0)
+				break
+			}
 		}
 	}
 	a.syncTextStyleButtons()
@@ -4591,6 +3776,11 @@ func (a *App) adoptTextStyleFromSelection() {
 	a.textTool.Bold = style.Bold
 	a.textTool.Italic = style.Italic
 	a.textTool.Underline = style.Underline
+	a.textTool.ScriptMode = style.ScriptMode
+	if style.ColorSet {
+		a.fg = style.Color
+		a.fgOperation = paintMode(style.ColorOp, style.Color)
+	}
 	a.syncTextToolbarControls()
 	a.updateTextFontUI()
 }
@@ -4623,6 +3813,8 @@ func (a *App) applyTextPropertyToSelection(kind string) {
 				s.Italic = a.textTool.Italic
 			case "underline":
 				s.Underline = a.textTool.Underline
+			case "scriptmode":
+				s.ScriptMode = a.textTool.ScriptMode
 			}
 			a.textTool.Styles[i] = s
 		}
@@ -4632,11 +3824,23 @@ func (a *App) applyTextPropertyToSelection(kind string) {
 		// sequence such as font -> size -> bold accumulates on the same caret.
 		a.armTextInsertionStyle(start, "toolbar "+kind)
 	}
+	// Guard against formatting callbacks silently collapsing a previously
+	// highlighted range when a combo-box gains focus.
+	if start < end && a.textTool.EditHwnd != 0 {
+		sendMessage(a.textTool.EditHwnd, EM_SETSEL, uintptr(start), uintptr(end))
+	}
 	a.markTextLayoutDirty()
 	a.syncTextLayoutControl()
 	a.resetTextCaretBlink()
 	a.requestTextRepaint(true)
-	logf("TEXT format kind=%s range=%d..%d font=%q size=%d b=%v i=%v u=%v", kind, start, end, a.textTool.FontName, a.textTool.FontSize, a.textTool.Bold, a.textTool.Italic, a.textTool.Underline)
+	matched := 0
+	for i := start; i < end && i < len(a.textTool.Styles); i++ {
+		style := a.textTool.Styles[i]
+		if textStylePropertyMatches(style, a.currentTextStyle(), kind) {
+			matched++
+		}
+	}
+	logf("TEXT_UI format kind=%s range=%d..%d matched=%d/%d font=%q size=%d b=%v i=%v u=%v scriptmode=%d", kind, start, end, matched, end-start, a.textTool.FontName, a.textTool.FontSize, a.textTool.Bold, a.textTool.Italic, a.textTool.Underline, a.textTool.ScriptMode)
 }
 
 func (a *App) resetTextCaretBlink() {
@@ -4725,10 +3929,16 @@ func (a *App) layoutTextGDI(hdc uintptr, text string, boxW, boxH int, draw bool)
 		}
 	}()
 	fontFor := func(style TextCharStyle) textGDIFontInfo {
-		if info, ok := fontCache[style]; ok {
+		// Ink color and invert mode do not affect a GDI font's geometry.
+		// Reuse the same HFONT across differently colored character runs.
+		fontKey := style
+		fontKey.Color, fontKey.ColorSet, fontKey.ColorOp = 0, false, PaintRGB
+		if info, ok := fontCache[fontKey]; ok {
 			return info
 		}
-		fontPixels := textPointSizeToCanvasPixels(style.FontSize)
+		// Superscripts/subscripts must be sized here: the native Rich Edit
+		// mirror is only used for layout bookkeeping, never for final pixels.
+		fontPixels := textPointSizeToCanvasPixels(textScriptPointSize(style.FontSize, style.ScriptMode))
 		h := createGDIFont(style.FontName, fontPixels, style.Bold, style.Italic, style.Underline)
 		info := textGDIFontInfo{handle: h, height: max(fontPixels+2, 2), aveWidth: max(fontPixels/2, 1)}
 		if h != 0 && hdc != 0 {
@@ -4740,7 +3950,7 @@ func (a *App) layoutTextGDI(hdc uintptr, text string, boxW, boxH int, draw bool)
 			}
 			procSelectObject.Call(hdc, old)
 		}
-		fontCache[style] = info
+		fontCache[fontKey] = info
 		return info
 	}
 	measure := func(info textGDIFontInfo, cluster string) (int, int) {
@@ -4759,7 +3969,7 @@ func (a *App) layoutTextGDI(hdc uintptr, text string, boxW, boxH int, draw bool)
 		procSelectObject.Call(hdc, old)
 		return max(int(sz.Cx), 1), max(info.height, int(sz.Cy))
 	}
-	drawCluster := func(info textGDIFontInfo, cluster string, x, y int) {
+	drawCluster := func(info textGDIFontInfo, style TextCharStyle, cluster string, x, y int) {
 		if !draw || hdc == 0 || info.handle == 0 || cluster == "\t" || cluster == "" {
 			return
 		}
@@ -4767,6 +3977,17 @@ func (a *App) layoutTextGDI(hdc uintptr, text string, boxW, boxH int, draw bool)
 		if len(cu) == 0 {
 			return
 		}
+		if a.textTool.GlyphMaskMode == 2 && ((style.ColorSet && style.ColorOp != PaintInvert) || (!style.ColorSet && a.chosenOperation(false) != PaintInvert)) {
+			return
+		}
+		ink := a.fg
+		if style.ColorSet {
+			ink = style.Color
+		}
+		if a.textTool.GlyphMaskMode != 0 || (style.ColorSet && style.ColorOp == PaintInvert) || (!style.ColorSet && a.chosenOperation(false) == PaintInvert) {
+			ink = rgb(255, 255, 255)
+		}
+		procSetTextColor.Call(hdc, uintptr(ink))
 		old, _, _ := procSelectObject.Call(hdc, info.handle)
 		procTextOutW.Call(hdc, uintptr(x), uintptr(y), uintptr(unsafe.Pointer(&cu[0])), uintptr(len(cu)))
 		procSelectObject.Call(hdc, old)
@@ -4826,6 +4047,9 @@ func (a *App) layoutTextGDI(hdc uintptr, text string, boxW, boxH int, draw bool)
 		}
 		style := a.textStyleAt(i)
 		info := fontFor(style)
+		baseStyle := style
+		baseStyle.ScriptMode = 0
+		baseInfo := fontFor(baseStyle)
 		cluster := string(utf16.Decode(units[i:end]))
 		width, height := measure(info, cluster)
 		if boxW > 0 && x > 0 && x+width > boxW {
@@ -4834,12 +4058,15 @@ func (a *App) layoutTextGDI(hdc uintptr, text string, boxW, boxH int, draw bool)
 			x = 0
 			lineHeight = max(defaultInfo.height, 2)
 		}
-		lineHeight = max(lineHeight, height)
+		// Keep the line tall enough for normal text so a lowered subscript
+		// is not clipped. Both screen preview and canvas commit use this path.
+		shiftY := textScriptTopOffset(baseInfo.height, info.height, style.ScriptMode)
+		lineHeight = max(lineHeight, max(baseInfo.height, height+shiftY))
 		setBoundary(i, x, y)
 		for j := i + 1; j < end; j++ {
 			setBoundary(j, x, y)
 		}
-		drawCluster(info, cluster, x, y)
+		drawCluster(info, style, cluster, x, y+shiftY)
 		clusters = append(clusters, TextGlyphCluster{Start: i, End: end, X: x, Y: y, W: max(width, 1)})
 		x += width
 		setBoundary(end, x, y)
@@ -5058,7 +4285,7 @@ func (a *App) endTextRangeSelection(mx, my int) {
 	if start == end {
 		a.statusText = fmt.Sprintf("텍스트 입력 위치: %d", start)
 	} else {
-		a.statusText = fmt.Sprintf("텍스트 선택: %d~%d. 글꼴·크기·B/I/U는 선택된 글자에만 적용됩니다.", min(start, end), max(start, end))
+		a.statusText = fmt.Sprintf("텍스트 선택: %d~%d. 글꼴·크기·B/I/U/위·아래첨자는 선택된 글자에만 적용됩니다.", min(start, end), max(start, end))
 	}
 	visualStart, visualEnd := start, end
 	if visualStart > visualEnd {
@@ -5641,31 +4868,84 @@ func (a *App) endTextBoxDrag() {
 }
 
 func (a *App) paintLiveTextPreview(hdc uintptr, ox, oy int) {
-	if !a.textTool.Active || a.textTool.W <= 0 || a.textTool.H <= 0 {
+	if !a.textTool.Active || a.canvas == nil || a.textTool.W <= 0 || a.textTool.H <= 0 {
 		return
 	}
 	text := a.currentTextValue()
 	if text == "" {
 		return
 	}
-
-	// Rasterize at the canvas's native pixel resolution with the exact same
-	// code path used by final commit.  Only after the pixels are fixed do we
-	// enlarge them with COLORONCOLOR, so zoomed previews show square canvas
-	// pixels instead of a second, smoothly scaled vector-font rendering.
-	preview := &Canvas{W: a.canvas.W, H: a.canvas.H, Pix: a.canvas.ClonePixels()}
-	a.renderTextToTarget(preview, text, false)
-	displayPix := preview.displayPixels(a.zoom)
-	if len(displayPix) == 0 {
+	left := max(0, a.textTool.X)
+	top := max(0, a.textTool.Y)
+	right := min(a.canvas.W, a.textTool.X+a.textTool.W)
+	bottom := min(a.canvas.H, a.textTool.Y+a.textTool.H)
+	if right <= left || bottom <= top {
 		return
 	}
-	bmi := BITMAPINFO{BmiHeader: BITMAPINFOHEADER{BiSize: uint32(unsafe.Sizeof(BITMAPINFOHEADER{})), BiWidth: int32(preview.W), BiHeight: -int32(preview.H), BiPlanes: 1, BiBitCount: 32, BiCompression: BI_RGB}}
-	// The text preview changes only inside its own box. Blitting the entire
-	// canvas for every IME composition notification was both expensive and the
-	// visible source of the box-wide flash. Reuse the stable DIB-tile path and
-	// transfer only the text rectangle.
-	clip := a.textScreenRect()
-	a.paintCanvasPixelsTiled(hdc, clip, ox, oy, displayPix, bmi)
+	// Build only the visible text rectangle. Start from the underlying raster
+	// canvas, not a tile that already includes objects; compositing such a tile
+	// again would make Invert Color cancel itself and change Z-order.
+	w, h := right-left, bottom-top
+	region := &Canvas{W: w, H: h, Pix: make([]byte, w*h*4)}
+	for y := 0; y < h; y++ {
+		copy(region.Pix[y*w*4:(y+1)*w*4], a.canvas.Pix[((top+y)*a.canvas.W+left)*4:((top+y)*a.canvas.W+right)*4])
+	}
+	if a.dejavu == nil && !a.indexedMode {
+		if candidate, ok := a.makeTextObject(text); ok {
+			// The preview object occupies exactly its eventual stack position.
+			// Re-editing replaces the old object in place; a new object is appended.
+			objects := append([]MovableObject(nil), a.objects...)
+			if index := a.objectEditingIndex; index >= 0 && index < len(objects) {
+				candidate.Transparency = objects[index].Transparency
+				candidate.GroupID = objects[index].GroupID
+				objects[index] = candidate
+			} else if a.keepObjects {
+				objects = append(objects, candidate)
+			} else {
+				// Without Keep Object, the committed pixels are beneath all
+				// remaining editable objects, unlike a new topmost object.
+				compositeObjectRows(region.Pix, w, h, w, left, top, []MovableObject{candidate}, -1)
+			}
+			compositeObjectRows(region.Pix, w, h, w, left, top, objects, -1)
+		} else {
+			// If object sprite creation fails, display the ordinary text
+			// raster preview rather than leaving an empty editing box.
+			savedX, savedY := a.textTool.X, a.textTool.Y
+			a.textTool.X, a.textTool.Y = savedX-left, savedY-top
+			a.renderTextToTarget(region, text, false)
+			a.textTool.X, a.textTool.Y = savedX, savedY
+			compositeObjectRows(region.Pix, w, h, w, left, top, a.objects, a.objectEditingIndex)
+		}
+	} else {
+		// Indexed documents retain the legacy pixel-editor route. This does
+		// not involve persistent objects because those are RGB-only.
+		if a.dejavu == nil && a.indexedMode && len(a.textTool.Styles) > 0 {
+			full := &Canvas{W: a.canvas.W, H: a.canvas.H, Pix: a.canvas.ClonePixels()}
+			a.renderIndexedStyledText(full, text, false)
+			for y := 0; y < h; y++ {
+				copy(region.Pix[y*w*4:(y+1)*w*4], full.Pix[((top+y)*full.W+left)*4:((top+y)*full.W+right)*4])
+			}
+		} else if a.dejavu == nil && a.indexedMode && (a.chosenOperation(false) == PaintInvert || a.chosenOperation(true) == PaintInvert) {
+			// Indexed inversion updates real indices only on commit; preview
+			// uses a full temporary image to preserve the indexed mapping.
+			full := &Canvas{W: a.canvas.W, H: a.canvas.H, Pix: a.canvas.ClonePixels()}
+			a.renderIndexedInvertText(full, text, false)
+			for y := 0; y < h; y++ {
+				copy(region.Pix[y*w*4:(y+1)*w*4], full.Pix[((top+y)*full.W+left)*4:((top+y)*full.W+right)*4])
+			}
+		} else {
+			savedX, savedY := a.textTool.X, a.textTool.Y
+			a.textTool.X, a.textTool.Y = savedX-left, savedY-top
+			a.renderTextToTarget(region, text, false)
+			a.textTool.X, a.textTool.Y = savedX, savedY
+		}
+	}
+	display := region.displayPixelsAt(a.zoom, left, top)
+	bmi := BITMAPINFO{BmiHeader: BITMAPINFOHEADER{BiSize: uint32(unsafe.Sizeof(BITMAPINFOHEADER{})), BiWidth: int32(w), BiHeight: -int32(h), BiPlanes: 1, BiBitCount: 32, BiCompression: BI_RGB}}
+	if len(display) > 0 {
+		procSetStretchBltMode.Call(hdc, COLORONCOLOR)
+		procStretchDIBits.Call(hdc, uintptr(ox+left*a.zoom), uintptr(oy+top*a.zoom), uintptr(w*a.zoom), uintptr(h*a.zoom), 0, 0, uintptr(w), uintptr(h), uintptr(unsafe.Pointer(&display[0])), uintptr(unsafe.Pointer(&bmi)), DIB_RGB_COLORS, SRCCOPY)
+	}
 }
 
 func (a *App) paintTextBoxHandles(hdc uintptr) {
@@ -5819,11 +5099,62 @@ func (a *App) finishTextEditing(commit bool) {
 	}
 	textVal := a.textTool.Text
 	if commit && strings.TrimSpace(textVal) != "" {
-		a.undo.Push(a.canvas)
-		a.renderTextToCanvas(textVal)
-		a.markDirty()
-		a.recordHistory("텍스트")
+		if a.dejavu == nil && !a.indexedMode && !a.rasterMode && (a.keepObjects || a.objectEditingIndex >= 0) {
+			if obj, ok := a.makeTextObject(textVal); ok {
+				if i := a.objectEditingIndex; i >= 0 && i < len(a.objects) {
+					obj.Transparency = a.objects[i].Transparency
+					obj.GroupID = a.objects[i].GroupID
+					if !objectsEqual([]MovableObject{a.objects[i]}, []MovableObject{obj}) {
+						a.objects[i] = obj
+						a.objectsRevision++
+						a.markDirty()
+						a.recordHistory("텍스트 객체 편집")
+					}
+					a.objectSelected = i
+				} else {
+					a.addMovableObject(obj)
+				}
+			} else if a.objectEditingIndex < 0 {
+				a.undo.Push(a.canvas)
+				if a.chosenOperation(false) == PaintInvert || a.chosenOperation(true) == PaintInvert {
+					if o, ok := a.makeTextObject(textVal); ok {
+						compositeObjectsToPixels(a.canvas.Pix, a.canvas.W, a.canvas.H, 0, 0, []MovableObject{o})
+					}
+				} else {
+					a.renderTextToCanvas(textVal)
+				}
+				a.markDirty()
+				a.recordHistory("텍스트")
+			}
+		} else {
+			a.undo.Push(a.canvas)
+			if a.indexedMode && a.dejavu == nil && len(a.textTool.Styles) > 0 {
+				a.renderIndexedStyledText(a.canvas, textVal, true)
+			} else if a.indexedMode && a.dejavu == nil && (a.chosenOperation(false) == PaintInvert || a.chosenOperation(true) == PaintInvert) {
+				a.renderIndexedInvertText(a.canvas, textVal, true)
+			} else if a.chosenOperation(false) == PaintInvert || a.chosenOperation(true) == PaintInvert {
+				if o, ok := a.makeTextObject(textVal); ok {
+					compositeObjectsToPixels(a.canvas.Pix, a.canvas.W, a.canvas.H, 0, 0, []MovableObject{o})
+				}
+			} else {
+				a.renderTextToCanvas(textVal)
+			}
+			if a.indexedMode && a.dejavu == nil && a.chosenOperation(false) != PaintInvert && a.chosenOperation(true) != PaintInvert {
+				a.quantizeIndexedTextBox()
+			}
+			a.markDirty()
+			a.recordHistory("텍스트")
+		}
 	}
+	if commit && strings.TrimSpace(textVal) == "" && a.objectEditingIndex >= 0 && a.objectEditingIndex < len(a.objects) {
+		i := a.objectEditingIndex
+		a.objects = append(a.objects[:i], a.objects[i+1:]...)
+		a.objectsRevision++
+		a.clearObjectSelection()
+		a.markDirty()
+		a.recordHistory("텍스트 객체 편집")
+	}
+	a.objectEditingIndex = -1
 	a.stopTextCaretBlink()
 	procKillTimer.Call(a.hwnd, textPreviewTimerID)
 	a.textTool.PreviewTimerPending = false
@@ -5913,24 +5244,68 @@ func (a *App) applyTextSizeFromCombo(preferSelection bool) bool {
 	if value == "" {
 		value = getWindowTextString(a.textTool.SizeCombo)
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(value))
-	if err != nil || n < 1 || n > 512 {
+	n, valid := parseTextPointSize(value)
+	if !valid {
+		logf("TEXT_UI size rejected raw=%q expected=1..512 (all 1..100 supported)", value)
 		return false
 	}
 	if a.textTool.FontSize != n {
 		a.textTool.FontSize = n
 		a.updateTextFontUI()
 		logf("TEXT size point=%d canvasPixels=%d", n, textPointSizeToCanvasPixels(n))
+		a.persistTextPreference("size input")
 	}
 	a.statusText = fmt.Sprintf("텍스트 크기: %d pt", a.textTool.FontSize)
 	return true
+}
+
+// Finalize a multi-digit edit on Enter or focus loss. Never change fonts,
+// styles, canvas layout, focus or the combo's edit selection while Windows is
+// handling CBN_EDITCHANGE. That notification runs *inside* the native edit
+// dispatch; updating RichEdit synchronously there can reset the caret and
+// turn an intended "25" into "52" or replace the initial digit outright.
+func (a *App) commitPendingTextSize(reason string) bool {
+	if !a.textTool.SizeEditPending || a.textTool.SizeEditHwnd == 0 {
+		return false
+	}
+	raw := getWindowTextString(a.textTool.SizeEditHwnd)
+	n, valid := parseTextPointSize(raw)
+	// Clear the guard before normalizing the final displayed value.
+	a.textTool.SizeEditPending = false
+	if !valid {
+		logf("TEXT_UI size edit discarded reason=%q raw=%q restored=%d", reason, raw, a.textTool.FontSize)
+		a.syncTextToolbarControls()
+		return false
+	}
+	if a.textTool.FontSize != n {
+		a.textTool.FontSize = n
+		a.updateTextFontUI()
+	}
+	// Explicit numeric input must apply to a selected range even when the
+	// toolbar's current size happens to equal the committed number.
+	a.applyTextPropertyToSelection("size")
+	a.persistTextPreference("size typed final")
+	a.syncTextToolbarControls()
+	logf("TEXT_UI size edit committed reason=%q raw=%q pt=%d", reason, raw, n)
+	return true
+}
+
+// Persist only explicit user toolbar choices; a caret move can adopt an
+// existing character's style without changing the saved default format.
+func (a *App) persistTextPreference(reason string) {
+	p := preferenceFromTextTool(&a.textTool)
+	if err := saveTextToolPreference(p); err != nil {
+		logf("TEXT_PREF save failed reason=%q err=%v", reason, err)
+	} else {
+		logf("TEXT_PREF saved reason=%q font=%q size=%d preview=%q b=%v i=%v u=%v scriptMode=%d", reason, p.FontName, p.FontSize, p.PreviewScript, p.Bold, p.Italic, p.Underline, p.ScriptMode)
+	}
 }
 
 func (a *App) handleTextControlCommand(id, code int) bool {
 	if id == ID_TEXT_LAYOUTBOX {
 		return true
 	}
-	if id < ID_TEXT_EDITBOX || id > ID_TEXT_UNDERLINE {
+	if id < ID_TEXT_EDITBOX || id > ID_TEXT_SIZEEDIT {
 		return false
 	}
 	a.ensureTextControls()
@@ -5961,6 +5336,7 @@ func (a *App) handleTextControlCommand(id, code int) bool {
 			a.updateTextFontUI()
 			a.applyTextPropertyToSelection("font")
 			a.statusText = fmt.Sprintf("텍스트 글꼴: %s", a.textTool.FontName)
+			a.persistTextPreference("font")
 			returnFocus = true
 		}
 		if code == CBN_CLOSEUP {
@@ -5968,24 +5344,42 @@ func (a *App) handleTextControlCommand(id, code int) bool {
 		}
 	case ID_TEXT_SIZECOMBO:
 		if code == CBN_SELCHANGE {
-			// Some Windows combo-box builds emit a second CBN_SELCHANGE carrying
-			// the previous list index while the dropdown is closing. Ignore only
-			// that short stale burst; a later deliberate click is still accepted.
+			focused, _, _ := procGetFocus.Call()
+			logf("TEXT_UI size dropdown selection focus=%#x edit=%#x combo=%#x pending=%v", focused, a.textTool.SizeEditHwnd, a.textTool.SizeCombo, a.textTool.SizeEditPending)
+			// List selection is independent of the standalone numeric editor.
+			a.textTool.SizeEditPending = false
 			idx := int(sendMessage(a.textTool.SizeCombo, CB_GETCURSEL, 0, 0))
-			nowMS := time.Now().UnixMilli()
-			if a.textTool.LastSizeApplyMS != 0 && nowMS-a.textTool.LastSizeApplyMS < 220 && idx != a.textTool.LastSizeListIndex {
-				logf("TEXT size stale notification ignored index=%d last=%d age=%dms", idx, a.textTool.LastSizeListIndex, nowMS-a.textTool.LastSizeApplyMS)
-				return true
-			}
-			if a.applyTextSizeFromCombo(true) {
+			if idx >= 0 && a.applyTextSizeFromCombo(true) {
 				a.textTool.LastSizeListIndex = idx
-				a.textTool.LastSizeApplyMS = nowMS
 				a.applyTextPropertyToSelection("size")
+				a.persistTextPreference("size list")
+				a.syncTextToolbarControls()
+				logf("TEXT_UI size list applied=%d idx=%d", a.textTool.FontSize, idx)
 				returnFocus = true
 			}
 		}
 		if code == CBN_CLOSEUP {
 			a.refreshTextComboSurface()
+		}
+	case ID_TEXT_SIZEEDIT:
+		if code == EN_CHANGE {
+			// Never update layout, selection, styles or this EDIT inside EN_CHANGE.
+			// The native control owns multi-digit text and its caret until commit.
+			a.textTool.SizeEditPending = true
+			focused, _, _ := procGetFocus.Call()
+			selection := sendMessage(a.textTool.SizeEditHwnd, EM_GETSEL, 0, 0)
+			logf("TEXT_UI size edit raw=%q currentSize=%d caret=%d..%d focused=%#x", getWindowTextString(a.textTool.SizeEditHwnd), a.textTool.FontSize, loword(selection), hiword(selection), focused)
+			return true
+		}
+		if code == EN_KILLFOCUS {
+			// Defer until native focus dispatch finishes; this also works when
+			// clicking a text style control or any other toolbar control.
+			procPostMessageW.Call(a.hwnd, WM_TEXTSIZE_COMMIT, 0, 0)
+			return true
+		}
+		if code == EN_SETFOCUS {
+			logf("TEXT_UI size edit focused initial=%q edit=%#x combo=%#x", getWindowTextString(a.textTool.SizeEditHwnd), a.textTool.SizeEditHwnd, a.textTool.SizeCombo)
+			return true
 		}
 	case ID_TEXT_SCRIPTCOMBO:
 		if code == CBN_SELCHANGE {
@@ -6000,6 +5394,7 @@ func (a *App) handleTextControlCommand(id, code int) bool {
 				a.statusText = fmt.Sprintf("글꼴 목록 미리보기: %s", a.textTool.Script)
 			}
 			a.refreshTextComboSurface()
+			a.persistTextPreference("font preview script")
 			returnFocus = true
 		}
 		if code == CBN_CLOSEUP {
@@ -6010,6 +5405,7 @@ func (a *App) handleTextControlCommand(id, code int) bool {
 			a.textTool.Bold = !a.textTool.Bold
 			a.updateTextFontUI()
 			a.applyTextPropertyToSelection("bold")
+			a.persistTextPreference("bold")
 			returnFocus = true
 		}
 	case ID_TEXT_ITALIC:
@@ -6017,6 +5413,7 @@ func (a *App) handleTextControlCommand(id, code int) bool {
 			a.textTool.Italic = !a.textTool.Italic
 			a.updateTextFontUI()
 			a.applyTextPropertyToSelection("italic")
+			a.persistTextPreference("italic")
 			returnFocus = true
 		}
 	case ID_TEXT_UNDERLINE:
@@ -6024,6 +5421,23 @@ func (a *App) handleTextControlCommand(id, code int) bool {
 			a.textTool.Underline = !a.textTool.Underline
 			a.updateTextFontUI()
 			a.applyTextPropertyToSelection("underline")
+			a.persistTextPreference("underline")
+			returnFocus = true
+		}
+	case ID_TEXT_SUPERSCRIPT:
+		if code == BN_CLICKED {
+			a.textTool.ScriptMode = toggleTextScriptMode(a.textTool.ScriptMode, 1)
+			a.updateTextFontUI()
+			a.applyTextPropertyToSelection("scriptmode")
+			a.persistTextPreference("superscript")
+			returnFocus = true
+		}
+	case ID_TEXT_SUBSCRIPT:
+		if code == BN_CLICKED {
+			a.textTool.ScriptMode = toggleTextScriptMode(a.textTool.ScriptMode, -1)
+			a.updateTextFontUI()
+			a.applyTextPropertyToSelection("scriptmode")
+			a.persistTextPreference("subscript")
 			returnFocus = true
 		}
 	}
@@ -6584,6 +5998,16 @@ func (a *App) captureSystemClipboard(reason string) bool {
 	a.lastClipboardSeq = uint32(seq)
 	a.clipboard = img // current Windows clipboard remains pasteable even when all six history slots are pinned
 	ok := a.addClipboardHistory(img, source)
+	// Keep editable data in the in-memory history too; the PNG thumbnail stays
+	// compatible with older applications. This is an independent read.
+	if ok && a.clipboardSelected >= 0 && a.clipboardSelected < len(a.clipboardHistory) {
+		a.clipboardHistory[a.clipboardSelected].EditableObjectData = nil
+		if packet, nativeErr := readEditableObjectClipboard(); nativeErr == nil {
+			if data, encodeErr := encodeObjectClipboard(packet); encodeErr == nil {
+				a.clipboardHistory[a.clipboardSelected].EditableObjectData = data
+			}
+		}
+	}
 	if !ok {
 		a.clipboard = img
 	}
@@ -6591,7 +6015,7 @@ func (a *App) captureSystemClipboard(reason string) bool {
 	return true
 }
 
-func (a *App) writeSystemClipboard(img ClipboardImage) error {
+func (a *App) writeSystemClipboard(img ClipboardImage, editable ...editableClipboardExport) error {
 	if !validClipboardImage(img) {
 		return errors.New("복사할 이미지가 올바르지 않습니다")
 	}
@@ -6633,6 +6057,15 @@ func (a *App) writeSystemClipboard(img ClipboardImage) error {
 		}
 		if clipboardImagePNGFormat != 0 && clipboardImagePNGFormat != clipboardPNGFormat {
 			items = append(items, clipboardPayload{format: clipboardImagePNGFormat, name: "image/png", data: pngData, png: true})
+		}
+	}
+	if len(editable) > 0 && len(editable[0].Native) > 0 {
+		ensureEditableClipboardFormats()
+		if clipboardEditableObjectFormat != 0 {
+			items = append(items, clipboardPayload{format: clipboardEditableObjectFormat, name: "dotPaint editable objects", data: editable[0].Native})
+		}
+		if clipboardSVGFormat != 0 && len(editable[0].SVG) > 0 {
+			items = append(items, clipboardPayload{format: clipboardSVGFormat, name: "image/svg+xml", data: editable[0].SVG})
 		}
 	}
 	if hasTransparency {
@@ -6712,6 +6145,7 @@ func (a *App) writeSystemClipboard(img ClipboardImage) error {
 	}
 
 	pngPublished := 0
+	nativePublished := false
 	publishedNames := make([]string, 0, len(items))
 	for i := range items {
 		if items[i].handle == 0 {
@@ -6730,6 +6164,12 @@ func (a *App) writeSystemClipboard(img ClipboardImage) error {
 		if items[i].png {
 			pngPublished++
 		}
+		if items[i].format == clipboardEditableObjectFormat && clipboardEditableObjectFormat != 0 {
+			nativePublished = true
+		}
+	}
+	if len(editable) > 0 && len(editable[0].Native) > 0 && !nativePublished {
+		return errors.New("이미지는 복사했지만 편집 가능한 객체 데이터를 Windows 클립보드에 기록하지 못했습니다")
 	}
 	if hasTransparency && pngPublished == 0 {
 		return errors.New("Windows 클립보드에 투명 PNG 형식을 넣지 못했습니다")
@@ -6804,6 +6244,14 @@ func (a *App) pasteClipboardImage(cb ClipboardImage, source string) bool {
 }
 
 func (a *App) pasteSelectedClipboard() bool {
+	if a.dejavu == nil && !a.indexedMode && !a.rasterMode {
+		if packet, err := readEditableObjectClipboard(); err == nil {
+			if a.pasteEditableObjects(packet) {
+				return true
+			}
+			logf("CLIPBOARD editable paste failed; using image fallback")
+		}
+	}
 	img, source, err := a.readSystemClipboard()
 	if err == nil && validClipboardImage(img) {
 		seq, _, _ := procGetClipboardSequenceNumber.Call()
@@ -6818,7 +6266,7 @@ func (a *App) pasteSelectedClipboard() bool {
 	if a.clipboardSelected >= 0 && a.clipboardSelected < len(a.clipboardHistory) {
 		e := a.clipboardHistory[a.clipboardSelected]
 		a.clipboard = e.Image
-		return a.pasteClipboardImage(e.Image, fmt.Sprintf("클립보드 기록 %d", a.clipboardSelected+1))
+		return a.pasteHistoryClipboard(a.clipboardSelected)
 	}
 	if validClipboardImage(a.clipboard) {
 		return a.pasteClipboardImage(a.clipboard, "내부 클립보드")
@@ -6852,9 +6300,11 @@ func (a *App) savePinnedClipboardHistory() {
 		logf("CLIPBOARD pins mkdir failed dir=%q err=%v", dir, err)
 		return
 	}
-	old, _ := filepath.Glob(filepath.Join(dir, "pin_*.png"))
-	for _, path := range old {
-		_ = os.Remove(path)
+	for _, pattern := range []string{"pin_*.png", "pin_*.dopclip"} {
+		old, _ := filepath.Glob(filepath.Join(dir, pattern))
+		for _, path := range old {
+			_ = os.Remove(path)
+		}
 	}
 	meta := make([]clipboardPinMeta, 0, 6)
 	pinNo := 0
@@ -6870,7 +6320,16 @@ func (a *App) savePinnedClipboardHistory() {
 			logf("CLIPBOARD pins image save failed path=%q err=%v", path, err)
 			continue
 		}
-		meta = append(meta, clipboardPinMeta{File: name, Source: e.Source, Added: e.Added})
+		item := clipboardPinMeta{File: name, Source: e.Source, Added: e.Added}
+		if len(e.EditableObjectData) > 0 {
+			if _, err := decodeObjectClipboard(e.EditableObjectData); err == nil {
+				item.EditableFile = fmt.Sprintf("pin_%02d.dopclip", pinNo)
+				if err := os.WriteFile(filepath.Join(dir, item.EditableFile), e.EditableObjectData, 0o600); err != nil {
+					item.EditableFile = ""
+				}
+			}
+		}
+		meta = append(meta, item)
 		if len(meta) >= clipboardHistoryCapacity {
 			break
 		}
@@ -6930,7 +6389,16 @@ func (a *App) loadPinnedClipboardHistory() {
 		if source == "" {
 			source = "고정 클립보드"
 		}
-		a.clipboardHistory = append(a.clipboardHistory, ClipboardEntry{Image: img, Hash: clipboardImageHash(img), Pinned: true, Source: source, Added: added})
+		entry := ClipboardEntry{Image: img, Hash: clipboardImageHash(img), Pinned: true, Source: source, Added: added}
+		if m.EditableFile != "" {
+			data, err := os.ReadFile(filepath.Join(dir, filepath.Base(m.EditableFile)))
+			if err == nil && len(data) <= objectClipboardMaxPacked {
+				if _, err := decodeObjectClipboard(data); err == nil {
+					entry.EditableObjectData = data
+				}
+			}
+		}
+		a.clipboardHistory = append(a.clipboardHistory, entry)
 	}
 	if len(a.clipboardHistory) > 0 {
 		a.clipboardSelected = 0
@@ -7008,9 +6476,13 @@ func statusBarHeight(a *App) int {
 }
 
 func palettePanelWidth() int {
-	// Current foreground/background boxes (70 px), 44 standard+custom color
-	// cells in two rows, and the final transparent swatch.
-	return 70 + paletteCellColumns*paletteCellSize + 2 + 46 + 6
+	// Current colors (70px), 22 grid columns, Invert + Transparent 46px
+	// swatches separated by 2px, and a 6px right padding.
+	return paletteWidthForColumns(paletteCellColumns)
+}
+
+func paletteWidthForColumns(cols int) int {
+	return 70 + cols*paletteCellSize + 2 + 46 + 2 + 46 + 6
 }
 
 func (a *App) paletteDisplayMode() int {
@@ -7038,7 +6510,7 @@ func (a *App) paletteVisibleCount() int {
 }
 func (a *App) palettePanelActualWidth() int {
 	cols := paletteDisplayColumns(a.paletteDisplayMode(), a.paletteVisibleCount())
-	return 70 + cols*paletteCellSize + 2 + 46 + 6
+	return paletteWidthForColumns(cols)
 }
 func (a *App) palettePanelActualHeight() int {
 	rows := paletteDisplayRows(a.paletteDisplayMode(), a.paletteVisibleCount())
@@ -7267,6 +6739,7 @@ func (a *App) viewportTopLeftImage() (int, int) {
 }
 
 func (a *App) updateScrollbars() {
+	a.updateObjectToolTooltip()
 	var rc RECT
 	procGetClientRect.Call(a.hwnd, uintptr(unsafe.Pointer(&rc)))
 	ws, _, _, _ := a.layout(rc)
@@ -7352,6 +6825,7 @@ func (a *App) captureSelectionImage() ClipboardImage {
 			}
 		}
 	}
+	compositeObjectsToPixels(out.Pix, out.W, out.H, s.X, s.Y, a.objects)
 	// Irregular selections still use a rectangular image container, but the
 	// pixels outside their real mask must be actual transparent pixels. Keeping
 	// the mask only as dotPaint metadata made Windows PNG/CF_DIB consumers and
@@ -7370,6 +6844,7 @@ func (a *App) clearSelectionPixels(bg uint32) {
 	if !s.Active {
 		return
 	}
+	a.flattenMovableObjectsIntoCanvas()
 	for y := 0; y < s.H; y++ {
 		for x := 0; x < s.W; x++ {
 			i := y*s.W + x
@@ -7390,6 +6865,7 @@ func (a *App) liftSelectionForMove() bool {
 		return true
 	}
 	a.undo.Push(a.canvas)
+	a.flattenMovableObjectsIntoCanvas()
 	img := a.captureSelectionImage()
 	if img.W < 1 || img.H < 1 {
 		a.undo.DiscardLast()
@@ -7538,17 +7014,46 @@ func (a *App) activatePendingRectSelection(mx, my int) {
 
 func (a *App) copySelection() bool {
 	img := a.captureSelectionImage()
+	var export editableClipboardExport
+	var objectErr error
+	if a.tool == ToolObjectSelect {
+		img = a.captureSelectedObjectImage()
+		if validClipboardImage(img) {
+			export, objectErr = a.selectedObjectsForClipboard()
+			if objectErr != nil {
+				// A raster fallback must still work if a native object is too
+				// large to serialize. Do not publish invalid native data.
+				logf("CLIPBOARD object encode failed; raster fallback: %v", objectErr)
+			}
+		}
+	}
 	if !validClipboardImage(img) {
 		return false
 	}
 	a.clipboard = img
-	a.addClipboardHistory(img, "dotPaint 복사")
-	if err := a.writeSystemClipboard(img); err != nil {
+	source := "dotPaint 복사"
+	if len(export.Native) > 0 {
+		source = "dotPaint 객체 복사"
+	}
+	addedToHistory := a.addClipboardHistory(img, source)
+	if addedToHistory && a.clipboardSelected >= 0 && a.clipboardSelected < len(a.clipboardHistory) {
+		a.clipboardHistory[a.clipboardSelected].EditableObjectData = append([]byte(nil), export.Native...)
+	}
+	var err error
+	if len(export.Native) > 0 {
+		err = a.writeSystemClipboard(img, export)
+	} else {
+		err = a.writeSystemClipboard(img)
+	}
+	if err != nil {
 		a.statusText = fmt.Sprintf("dotPaint 기록에는 복사했지만 Windows 클립보드 복사에 실패했습니다: %v", err)
 		logf("SELECTION copy system failed w=%d h=%d err=%v", img.W, img.H, err)
+	} else if objectErr != nil {
+		a.statusText = fmt.Sprintf("객체 데이터를 보존하지 못해 이미지로 복사했습니다: %v", objectErr)
+	} else if len(export.Native) > 0 {
+		a.statusText = fmt.Sprintf("편집 가능한 객체와 투명 PNG 이미지를 함께 복사했습니다 (%d×%d).", img.W, img.H)
 	} else {
 		a.statusText = fmt.Sprintf("선택 영역 %d × %d을(를) Windows 클립보드와 기록에 복사했습니다.", img.W, img.H)
-		logf("SELECTION copy system w=%d h=%d", img.W, img.H)
 	}
 	invalidate(a.hwnd)
 	return true
@@ -7566,7 +7071,22 @@ func (a *App) replaceSelectionWith(fill uint32, historyName string) bool {
 	if a.selection.Floating && len(a.selection.BasePix) == len(a.canvas.Pix) {
 		copy(a.canvas.Pix, a.selection.BasePix)
 	}
-	a.clearSelectionPixels(fill)
+	// Delete affects only real painted pixels hit by the selection mask.
+	// Other editable objects must not be flattened as a side effect of Del.
+	sel := PixelSelectionCut{X: a.selection.X, Y: a.selection.Y, W: a.selection.W, H: a.selection.H, Mask: a.selection.Mask}
+	updated, affected := cutSelectedObjectPixels(a.canvas, a.objects, sel)
+	if len(affected) > 0 {
+		a.objects = updated
+		a.objectsRevision++
+		a.clearObjectSelection()
+	}
+	for y := 0; y < sel.H; y++ {
+		for x := 0; x < sel.W; x++ {
+			if sel.contains(sel.X+x, sel.Y+y) {
+				a.canvas.SetPixel(sel.X+x, sel.Y+y, fill)
+			}
+		}
+	}
 	a.clearSelectionState()
 	a.markDirty()
 	a.recordHistory(historyName)
@@ -7613,6 +7133,7 @@ func (a *App) pasteInternalClipboard() bool {
 }
 
 func (a *App) selectAll() {
+	a.objectArmed = 0
 	a.clearSelectionState()
 	a.selection = SelectionState{Active: true, X: 0, Y: 0, W: a.canvas.W, H: a.canvas.H}
 	a.tool = ToolRectSelect
@@ -7827,6 +7348,13 @@ func (a *App) finishCanvasResize(cancel bool) {
 	}
 	a.undo.Push(a.canvas)
 	a.canvas.ResizeCanvas(nw, nh, -ld, -td, a.bg)
+	if len(a.objects) > 0 && (ld != 0 || td != 0) {
+		for i := range a.objects {
+			a.objects[i].X -= ld
+			a.objects[i].Y -= td
+		}
+		a.objectsRevision++
+	}
 	a.scrollX -= ld * a.zoom
 	a.scrollY -= td * a.zoom
 	a.markDirty()
@@ -8188,7 +7716,7 @@ func (a *App) refreshTextComboSurface() {
 }
 
 func validReturnTool(tool Tool) bool {
-	return tool >= ToolFreeSelect && tool <= ToolArrow && tool != ToolEyedropper && tool != ToolMagnifier
+	return tool >= ToolFreeSelect && tool <= ToolObjectSelect && tool != ToolEyedropper && tool != ToolMagnifier
 }
 
 func (a *App) clearZoomPreview() {
@@ -8516,6 +8044,20 @@ func themedOwnerDrawPushButtonColors(dis *DRAWITEMSTRUCT) (bg, border, textColor
 		focusColor = rgb(85, 170, 255)
 	}
 	checked := sendMessage(dis.HwndItem, BM_GETCHECK, 0, 0) == BST_CHECKED
+	if app != nil {
+		switch dis.HwndItem {
+		case app.textTool.BoldBtn:
+			checked = app.textTool.Bold
+		case app.textTool.ItalicBtn:
+			checked = app.textTool.Italic
+		case app.textTool.UnderlineBtn:
+			checked = app.textTool.Underline
+		case app.textTool.SuperscriptBtn:
+			checked = app.textTool.ScriptMode == 1
+		case app.textTool.SubscriptBtn:
+			checked = app.textTool.ScriptMode == -1
+		}
+	}
 	if checked && dis.ItemState&ODS_SELECTED == 0 {
 		if dark {
 			bg = rgb(78, 78, 78)
@@ -8577,6 +8119,15 @@ func drawThemedOwnerDrawPushButton(dis *DRAWITEMSTRUCT) bool {
 	textColor, focusColor, dx, dy, ok := paintThemedOwnerDrawPushButtonBase(dis)
 	if !ok {
 		return false
+	}
+	if app != nil {
+		switch dis.HwndItem {
+		case app.textTool.BoldBtn, app.textTool.ItalicBtn, app.textTool.UnderlineBtn,
+			app.textTool.SuperscriptBtn, app.textTool.SubscriptBtn:
+			drawTextToolbarStyleGlyph(dis, textColor, dx, dy)
+			paintThemedOwnerDrawPushButtonFocus(dis, focusColor)
+			return true
+		}
 	}
 
 	font := sendMessage(dis.HwndItem, WM_GETFONT, 0, 0)
@@ -8917,6 +8468,7 @@ func applyDarkThemeToWindow(hwnd uintptr, dark bool) {
 }
 
 func (a *App) applyWindowTheme() {
+	a.updateObjectToolTooltip()
 	applyDarkThemeToWindow(a.hwnd, a.darkMode)
 	if a.darkMode && a.darkBrush == 0 {
 		a.darkBrush, _, _ = procCreateSolidBrush.Call(uintptr(rgb(30, 30, 30)))
@@ -9108,8 +8660,7 @@ var colorDialogHookCallback uintptr // legacy ChooseColor hook is inactive in 1.
 func (a *App) refreshOpenEditorsForTheme() {
 	// The text toolbox lives inside the main window rather than in a separate
 	// editor. Theme its combos and owner-drawn B/I/U buttons explicitly.
-	themeWindowHandles(a.darkMode, a.textTool.FontCombo, a.textTool.SizeCombo, a.textTool.ScriptCombo,
-		a.textTool.BoldBtn, a.textTool.ItalicBtn, a.textTool.UnderlineBtn)
+	themeWindowHandles(a.darkMode, a.textToolbarControlHandles()...)
 	if s := activeFormulaEditor; s != nil && s.hwnd != 0 {
 		themeWindowHandles(a.darkMode, s.hwnd)
 		for _, hwnd := range s.controls {
@@ -9235,9 +8786,13 @@ func (a *App) buildMenu() {
 	file, _, _ := procCreatePopupMenu.Call()
 	edit, _, _ := procCreatePopupMenu.Call()
 	view, _, _ := procCreatePopupMenu.Call()
+	selectM, _, _ := procCreatePopupMenu.Call()
+	selectOpacity, _, _ := procCreatePopupMenu.Call()
+	selectOrder, _, _ := procCreatePopupMenu.Call()
 	imageM, _, _ := procCreatePopupMenu.Call()
 	a.viewMenu = view
 	a.imageMenu = imageM
+	a.objectSelectMenu, a.objectSelectOpacityMenu, a.objectSelectOrderMenu = selectM, selectOpacity, selectOrder
 	colorM, _, _ := procCreatePopupMenu.Call()
 	insertM, _, _ := procCreatePopupMenu.Call()
 	insertImageM, _, _ := procCreatePopupMenu.Call()
@@ -9299,6 +8854,10 @@ func (a *App) buildMenu() {
 	appendItem(languageMenu, enFlags, ID_VIEW_LANGUAGE_EN, "English")
 	appendPopup(view, languageMenu, "언어(&L)")
 
+	appendItem(selectM, MF_STRING, ID_SELECT_OBJECT_TOOL, "객체 선택(&V)\tV")
+	appendSep(selectM)
+	a.appendObjectCommands(selectM, selectOpacity, selectOrder, a.objectSelected)
+
 	appendItem(imageM, MF_STRING, ID_IMAGE_FLIP, "대칭 이동/회전(&F)...\tCtrl+R")
 	appendItem(imageM, MF_STRING, ID_IMAGE_STRETCH, "늘이기/기울이기(&S)...\tCtrl+W")
 	appendItem(imageM, MF_STRING, ID_IMAGE_INVERT, "색 반전(&I)\tCtrl+I")
@@ -9309,6 +8868,12 @@ func (a *App) buildMenu() {
 		opaqueFlags |= MF_CHECKED
 	}
 	appendItem(imageM, opaqueFlags, ID_IMAGE_OPAQUE, "불투명하게 그리기(&D)")
+	appendSep(imageM)
+	rasterFlags := uint32(MF_STRING)
+	if a.rasterMode {
+		rasterFlags |= MF_CHECKED
+	}
+	appendItem(imageM, rasterFlags, ID_IMAGE_RASTER_MODE, "래스터화 모드(&M)")
 
 	appendItem(colorM, MF_STRING, ID_COLOR_EDIT, "색 편집(&E)...")
 	appendSep(colorM)
@@ -9366,6 +8931,7 @@ func (a *App) buildMenu() {
 	appendTopLevelPopup(main, file, "파일(&F)")
 	appendTopLevelPopup(main, edit, "편집(&E)")
 	appendTopLevelPopup(main, view, "보기(&V)")
+	appendTopLevelPopup(main, selectM, "선택(&S)")
 	appendTopLevelPopup(main, imageM, "이미지(&I)")
 	appendTopLevelPopup(main, colorM, "색(&C)")
 	appendTopLevelPopup(main, insertM, "삽입(&N)")
@@ -9593,112 +9159,6 @@ func decodeImageFile(path string) (*Canvas, error) {
 	return cv, nil
 }
 
-func (c *Canvas) toRGBA() *image.NRGBA {
-	img := image.NewNRGBA(image.Rect(0, 0, c.W, c.H))
-	for y := 0; y < c.H; y++ {
-		for x := 0; x < c.W; x++ {
-			si := (y*c.W + x) * 4
-			di := img.PixOffset(x, y)
-			img.Pix[di] = c.Pix[si+2]
-			img.Pix[di+1] = c.Pix[si+1]
-			img.Pix[di+2] = c.Pix[si]
-			img.Pix[di+3] = c.Pix[si+3]
-		}
-	}
-	return img
-}
-
-func (c *Canvas) toOpaqueNRGBA() *image.NRGBA {
-	img := image.NewNRGBA(image.Rect(0, 0, c.W, c.H))
-	for y := 0; y < c.H; y++ {
-		for x := 0; x < c.W; x++ {
-			si := (y*c.W + x) * 4
-			di := img.PixOffset(x, y)
-			a := int(c.Pix[si+3])
-			img.Pix[di+0] = byte((int(c.Pix[si+2])*a + 255*(255-a) + 127) / 255)
-			img.Pix[di+1] = byte((int(c.Pix[si+1])*a + 255*(255-a) + 127) / 255)
-			img.Pix[di+2] = byte((int(c.Pix[si+0])*a + 255*(255-a) + 127) / 255)
-			img.Pix[di+3] = 255
-		}
-	}
-	return img
-}
-func encodeImageFile(path string, c *Canvas) error {
-	ext := strings.ToLower(filepath.Ext(path))
-	if ext == "" {
-		path += ".png"
-		ext = ".png"
-	}
-	if ext == ".bmp" {
-		return encodeBMP(path, c)
-	}
-	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".gif" {
-		return fmt.Errorf("지원하지 않는 저장 형식: %s", ext)
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	switch ext {
-	case ".jpg", ".jpeg":
-		return jpeg.Encode(f, c.toOpaqueNRGBA(), &jpeg.Options{Quality: 92})
-	case ".gif":
-		// GIF is an indexed, single-frame format. Always write genuine GIF
-		// bytes; never silently put PNG data into a .gif filename.
-		return encodeStillGIF(f, c.toRGBA())
-	case ".png":
-		return png.Encode(f, c.toRGBA())
-	default:
-		return fmt.Errorf("지원하지 않는 저장 형식: %s (PNG, BMP, JPEG, GIF 사용)", ext)
-	}
-}
-
-func encodeBMP(path string, c *Canvas) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	row := ((c.W*3 + 3) / 4) * 4
-	dataSize := row * c.H
-	// BITMAPFILEHEADER
-	binary.Write(f, binary.LittleEndian, uint16(0x4d42))
-	binary.Write(f, binary.LittleEndian, uint32(14+40+dataSize))
-	binary.Write(f, binary.LittleEndian, uint16(0))
-	binary.Write(f, binary.LittleEndian, uint16(0))
-	binary.Write(f, binary.LittleEndian, uint32(54))
-	binary.Write(f, binary.LittleEndian, uint32(40))
-	binary.Write(f, binary.LittleEndian, int32(c.W))
-	binary.Write(f, binary.LittleEndian, int32(c.H))
-	binary.Write(f, binary.LittleEndian, uint16(1))
-	binary.Write(f, binary.LittleEndian, uint16(24))
-	binary.Write(f, binary.LittleEndian, uint32(0))
-	binary.Write(f, binary.LittleEndian, uint32(dataSize))
-	binary.Write(f, binary.LittleEndian, int32(2835))
-	binary.Write(f, binary.LittleEndian, int32(2835))
-	binary.Write(f, binary.LittleEndian, uint32(0))
-	binary.Write(f, binary.LittleEndian, uint32(0))
-	buf := make([]byte, row)
-	for y := c.H - 1; y >= 0; y-- {
-		for i := range buf {
-			buf[i] = 0
-		}
-		for x := 0; x < c.W; x++ {
-			si := (y*c.W + x) * 4
-			di := x * 3
-			a := int(c.Pix[si+3])
-			buf[di] = byte((int(c.Pix[si])*a + 255*(255-a) + 127) / 255)
-			buf[di+1] = byte((int(c.Pix[si+1])*a + 255*(255-a) + 127) / 255)
-			buf[di+2] = byte((int(c.Pix[si+2])*a + 255*(255-a) + 127) / 255)
-		}
-		if _, err = f.Write(buf); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func decodeBMP(path string) (*Canvas, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -9777,9 +9237,16 @@ func filterString() []uint16 {
 }
 
 func documentFilterString() []uint16 {
-	s := "지원 파일 (*.png;*.bmp;*.jpg;*.jpeg;*.gif;*.img)\x00*.png;*.bmp;*.jpg;*.jpeg;*.gif;*.img\x00DejaVu 타일 그래픽 (*.img)\x00*.img\x00그림 파일 (*.png;*.bmp;*.jpg;*.jpeg;*.gif)\x00*.png;*.bmp;*.jpg;*.jpeg;*.gif\x00모든 파일 (*.*)\x00*.*\x00\x00"
+	s := "지원 파일 (*.dop;*.png;*.bmp;*.jpg;*.jpeg;*.gif;*.img)\x00*.dop;*.png;*.bmp;*.jpg;*.jpeg;*.gif;*.img\x00dotPaint 편집 프로젝트 (*.dop)\x00*.dop\x00DejaVu 타일 그래픽 (*.img)\x00*.img\x00그림 파일 (*.png;*.bmp;*.jpg;*.jpeg;*.gif)\x00*.png;*.bmp;*.jpg;*.jpeg;*.gif\x00모든 파일 (*.*)\x00*.*\x00\x00"
 	return utf16.Encode([]rune(s))
 }
+
+func dopSaveFilterString() []uint16 {
+	s := "dotPaint 편집 프로젝트 (*.dop)\x00*.dop\x00PNG 그림 (*.png)\x00*.png\x00비트맵 그림 (*.bmp)\x00*.bmp\x00JPEG 그림 (*.jpg;*.jpeg)\x00*.jpg;*.jpeg\x00GIF 그림 (*.gif)\x00*.gif\x00모든 파일 (*.*)\x00*.*\x00\x00"
+	return utf16.Encode([]rune(s))
+}
+
+func isDOPPath(path string) bool { return strings.EqualFold(filepath.Ext(path), ".dop") }
 
 func chooseOpenFile(hwnd uintptr) (string, bool) {
 	buf := make([]uint16, 32768)
@@ -9805,17 +9272,44 @@ func chooseOpenDocumentFile(hwnd uintptr) (string, bool) {
 func chooseSaveFile(hwnd uintptr, current string) (string, bool) {
 	buf := make([]uint16, 32768)
 	if current != "" {
-		u := syscall.StringToUTF16(current)
-		copy(buf, u)
+		// Suggest a DOP peer even when the source was originally a PNG.
+		copy(buf, syscall.StringToUTF16(strings.TrimSuffix(current, filepath.Ext(current))+".dop"))
 	}
-	filter := filterString()
-	def := utf16Ptr("png")
-	ofn := OPENFILENAMEW{LStructSize: uint32(unsafe.Sizeof(OPENFILENAMEW{})), HwndOwner: hwnd, LpstrFilter: &filter[0], LpstrFile: &buf[0], NMaxFile: uint32(len(buf)), Flags: OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT, LpstrDefExt: def}
+	filter := dopSaveFilterString()
+	def := utf16Ptr("dop")
+	ofn := OPENFILENAMEW{LStructSize: uint32(unsafe.Sizeof(OPENFILENAMEW{})), HwndOwner: hwnd, LpstrFilter: &filter[0], LpstrFile: &buf[0], NMaxFile: uint32(len(buf)), NFilterIndex: 1, Flags: OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT, LpstrDefExt: def}
 	r, _, _ := procGetSaveFileNameW.Call(uintptr(unsafe.Pointer(&ofn)))
 	if r == 0 {
 		return "", false
 	}
-	return syscall.UTF16ToString(buf), true
+	path := syscall.UTF16ToString(buf)
+	if path == "" {
+		return "", false
+	}
+	originalDialogPath := path
+	// The selected file type is authoritative when a different type was chosen
+	// from the dropdown. A manually typed supported extension in the DOP filter
+	// is still respected, matching classic Paint file-dialog behavior.
+	types := []string{".dop", ".png", ".bmp", ".jpg", ".gif"}
+	ext := strings.ToLower(filepath.Ext(path))
+	if ofn.NFilterIndex >= 2 && ofn.NFilterIndex <= 5 {
+		want := types[ofn.NFilterIndex-1]
+		if ext != want && !(want == ".jpg" && ext == ".jpeg") {
+			path = strings.TrimSuffix(path, filepath.Ext(path)) + want
+		}
+	} else if ext == "" {
+		path += ".dop"
+	}
+	// The file-type dropdown can adjust the suffix *after* the Windows common
+	// dialog closes. Recheck overwriting against that final adjusted filename.
+	if !strings.EqualFold(path, originalDialogPath) {
+		if _, err := os.Stat(path); err == nil {
+			if messageBox(hwnd, fmt.Sprintf(localizeUI("이미 파일이 존재합니다. 덮어쓰시겠습니까?\n\n%s"), path), "dotPaint", MB_YESNO|MB_ICONWARNING) != IDYES {
+				return "", false
+			}
+		}
+	}
+	return path, true
 }
 
 func (a *App) confirmLoseChanges() bool {
@@ -9848,6 +9342,13 @@ func (a *App) newDocument() {
 		logf("NEW_DOCUMENT clipboard-size unavailable: %v", err)
 	}
 	a.canvas = NewCanvas(w, h, a.defaultNewCanvasColor())
+	a.objects = nil
+	a.objectsRevision = 0
+	a.clearObjectSelection()
+	a.objectEditingIndex = -1
+	a.objectDragging = false
+	a.objectArmed = 0
+	a.objectContextPending = false
 	a.indexedPixelIndices = nil
 	a.clearSelectionState()
 	a.filePath = ""
@@ -9873,6 +9374,9 @@ func (a *App) openDocument(path string) bool {
 	if strings.EqualFold(filepath.Ext(path), ".img") {
 		return a.openDejavuIMGDocument(path)
 	}
+	if isDOPPath(path) {
+		return a.loadDOPDocument(path)
+	}
 	a.leaveDejavuIMGMode()
 	cv, err := decodeImageFile(path)
 	if err != nil {
@@ -9880,6 +9384,13 @@ func (a *App) openDocument(path string) bool {
 		return false
 	}
 	a.canvas = cv
+	a.objects = nil
+	a.objectsRevision = 0
+	a.clearObjectSelection()
+	a.objectEditingIndex = -1
+	a.objectDragging = false
+	a.objectArmed = 0
+	a.objectContextPending = false
 	if a.indexedMode {
 		a.indexedPixelIndices = quantizeIndexedBGRA(a.canvas.Pix, a.palette, a.indexedActiveCount)
 	}
@@ -9897,7 +9408,7 @@ func (a *App) openDocument(path string) bool {
 
 func isSupportedDroppedImage(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".png", ".bmp", ".jpg", ".jpeg", ".gif", ".img":
+	case ".dop", ".png", ".bmp", ".jpg", ".jpeg", ".gif", ".img":
 		return true
 	}
 	return false
@@ -9949,7 +9460,7 @@ func (a *App) handleDroppedFiles(hdrop uintptr) {
 		}
 	}
 	if chosen == "" {
-		messageBox(a.hwnd, "불러올 수 있는 그림 파일이 없습니다.\n\n지원 형식: PNG, BMP, JPG, JPEG, GIF, DejaVu IMG", "dotPaint", MB_OK|MB_ICONWARNING)
+		messageBox(a.hwnd, "불러올 수 있는 그림 파일이 없습니다.\n\n지원 형식: DOP, PNG, BMP, JPG, JPEG, GIF, DejaVu IMG", "dotPaint", MB_OK|MB_ICONWARNING)
 		a.statusText = "드롭한 항목에서 지원되는 그림 파일을 찾지 못했습니다."
 		invalidate(a.hwnd)
 		return
@@ -9972,18 +9483,37 @@ func (a *App) save(forceAs bool) bool {
 		return a.saveDejavuIMG(forceAs)
 	}
 	path := a.filePath
-	if forceAs || path == "" {
+	if forceAs || a.mustChooseDOPSaveTarget() {
 		var ok bool
 		path, ok = chooseSaveFile(a.hwnd, path)
 		if !ok {
 			return false
 		}
-		if filepath.Ext(path) == "" {
-			path += ".png"
+	}
+	// Confirm flatten-only output BEFORE committing a live text edit or a
+	// floating selection. Cancel leaves the editing state exactly as it was.
+	if !isDOPPath(path) && (hasEditableDOPObjects(a.objects) || (a.textTool.Active && !a.indexedMode && (a.keepObjects || a.objectEditingIndex >= 0))) {
+		if messageBox(a.hwnd, localizeUI("일반 그림 형식에는 객체의 편집 정보와 동적 반전색이 저장되지 않습니다.\n\n현재 작업 화면은 유지됩니다. 합성 이미지만 저장할까요?"), "dotPaint", MB_YESNO|MB_ICONWARNING) != IDYES {
+			return false
 		}
 	}
-	if err := encodeImageFile(path, a.canvas); err != nil {
-		messageBox(a.hwnd, "파일을 저장할 수 없습니다.\n\n"+err.Error(), "dotPaint", MB_OK|MB_ICONERROR)
+	// Once the output format is accepted, commit any active text/floating pixels.
+	if a.textTool.Active {
+		a.finishTextEditing(true)
+	}
+	if a.selection.Floating {
+		a.applyFloatingSelection(a.selection.X, a.selection.Y)
+		a.clearSelectionState()
+	}
+	var err error
+	if isDOPPath(path) {
+		project := a.currentDOPProject()
+		err = WriteDOPProject(path, project, a.flattenedObjectsCanvas())
+	} else {
+		err = encodeImageFile(path, a.flattenedObjectsCanvas())
+	}
+	if err != nil {
+		messageBox(a.hwnd, localizeUI("파일을 저장할 수 없습니다.\n\n")+err.Error(), "dotPaint", MB_OK|MB_ICONERROR)
 		return false
 	}
 	a.filePath = path
@@ -10055,6 +9585,7 @@ func (a *App) paintBuffered(screenDC uintptr, update RECT) {
 	if !a.ensureBackBuffer(screenDC, w, h) {
 		logf("PAINT #%d fallback direct", count)
 		a.paint(screenDC)
+		a.drawFixedObjectPointerOnPaint(screenDC, update)
 		return
 	}
 
@@ -10079,6 +9610,7 @@ func (a *App) paintBuffered(screenDC uintptr, update RECT) {
 	}
 
 	_, _, err := procBitBlt.Call(screenDC, uintptr(left), uintptr(top), uintptr(right-left), uintptr(bottom-top), a.backDC, uintptr(left), uintptr(top), SRCCOPY)
+	a.drawFixedObjectPointerOnPaint(screenDC, update)
 	elapsed := time.Since(started)
 	if count <= 20 || count%100 == 0 || elapsed > 100*time.Millisecond {
 		logf("PAINT #%d update=(%d,%d)-(%d,%d) client=%dx%d elapsed=%s err=%v", count, left, top, right, bottom, w, h, elapsed, err)
@@ -10161,6 +9693,7 @@ func (a *App) paintCanvas(hdc uintptr, ws RECT) {
 		a.paintPreview(hdc, ox, oy)
 	}
 	a.paintSelectionOverlay(hdc, ox, oy)
+	a.paintMovableObjectSelection(hdc, ox, oy)
 	a.paintTextOverlay(hdc, ox, oy)
 	a.paintZoomPreview(hdc, ox, oy)
 	a.paintEraserCursor(hdc, ox, oy)
@@ -10171,9 +9704,11 @@ func (a *App) paintCanvas(hdc uintptr, ws RECT) {
 		r := RECT{int32(left), int32(top), int32(left + a.resizePreviewW*a.zoom), int32(top + a.resizePreviewH*a.zoom)}
 		frameRect(hdc, r, uiColor(rgb(0, 120, 215)))
 	}
-	for _, r := range a.canvasHandleRects() {
-		fillUIRect(hdc, r, rgb(255, 255, 255))
-		frameRect(hdc, r, uiColor(rgb(0, 120, 215)))
+	if a.tool != ToolObjectSelect {
+		for _, r := range a.canvasHandleRects() {
+			fillUIRect(hdc, r, rgb(255, 255, 255))
+			frameRect(hdc, r, uiColor(rgb(0, 120, 215)))
+		}
 	}
 }
 
@@ -10277,6 +9812,9 @@ func (a *App) copyCanvasTileToDIB(pixels []byte, tile CanvasBlitTile) bool {
 		dstStart := row * dstStride
 		copy(dst[dstStart:dstStart+rowBytes], pixels[srcStart:srcStart+rowBytes])
 	}
+	// Cache the native sprite pixels; composite only clipped visible DIB tiles.
+	// Zero objects means no extra work in the hot draw/field/3D paths.
+	a.applyObjectsToTile(tile)
 	return true
 }
 
@@ -10423,7 +9961,7 @@ func (a *App) verifyCanvasBlitPixels(hdc uintptr, ox, oy int, pixels []byte, til
 		if i < 0 || i+3 >= len(pixels) {
 			continue
 		}
-		expected := bgraToColorref(pixels[i], pixels[i+1], pixels[i+2]) & 0x00FFFFFF
+		expected := a.sampledDisplayObjectPixel(sx, sy, pixels)
 		dx := ox + sx*a.zoom + max(a.zoom/2, 0)
 		dy := oy + sy*a.zoom + max(a.zoom/2, 0)
 		actual, _, _ := procGetPixel.Call(hdc, uintptr(dx), uintptr(dy))
@@ -10520,13 +10058,6 @@ func drawDashedLineWidth(hdc uintptr, x0, y0, x1, y1 int, c uint32, width int) {
 		procMoveToEx.Call(hdc, uintptr(ax), uintptr(ay), 0)
 		procLineTo.Call(hdc, uintptr(bx), uintptr(by))
 	}
-}
-
-func absInt(v int) int {
-	if v < 0 {
-		return -v
-	}
-	return v
 }
 
 func drawMaskedSelectionOutline(hdc uintptr, ox, oy, zoom, x, y, w, h int, mask []bool, color uint32, width int) {
@@ -11028,240 +10559,10 @@ func (a *App) updateSelectionMovePosition(pointerX, pointerY int, shift bool) {
 	a.requestCanvasRepaint(true)
 }
 
-type strictTanStep struct {
-	X int
-	Y int
-}
-
-func nearestStrictTanStep(dx, dy float64) strictTanStep {
-	length := math.Hypot(dx, dy)
-	if length <= 0 {
-		return strictTanStep{}
-	}
-	ux, uy := dx/length, dy/length
-	candidates := []strictTanStep{{X: 1, Y: 0}, {X: -1, Y: 0}, {X: 0, Y: 1}, {X: 0, Y: -1}}
-	for _, ratio := range lineTanRatios {
-		for _, sx := range []int{-1, 1} {
-			for _, sy := range []int{-1, 1} {
-				candidates = append(candidates, strictTanStep{X: sx * ratio.Run, Y: sy * ratio.Rise})
-			}
-		}
-	}
-	best := candidates[0]
-	bestDot := -2.0
-	for _, d := range candidates {
-		norm := math.Hypot(float64(d.X), float64(d.Y))
-		dot := ux*float64(d.X)/norm + uy*float64(d.Y)/norm
-		if dot > bestDot {
-			bestDot = dot
-			best = d
-		}
-	}
-	return best
-}
-
-func nearestLineDirection(dx, dy float64, mode LineConstraintMode) (float64, float64) {
-	length := math.Hypot(dx, dy)
-	if length <= 0 {
-		return 0, 0
-	}
-	if mode == LineConstraint15Degrees {
-		step := math.Pi / 12.0
-		angle := math.Round(math.Atan2(dy, dx)/step) * step
-		return math.Cos(angle), math.Sin(angle)
-	}
-	d := nearestStrictTanStep(dx, dy)
-	norm := math.Hypot(float64(d.X), float64(d.Y))
-	if norm <= 0 {
-		return 0, 0
-	}
-	return float64(d.X) / norm, float64(d.Y) / norm
-}
-
-// strictTanPointAt returns the pixel reached after exactly majorSteps one-pixel
-// advances along the chosen integer-ratio staircase. For tan 1/3 the sequence
-// is (0,0), (1,0), (2,0), (3,1), (4,1), (5,1), (6,2)... . Thus the body keeps
-// the exact three-horizontal-per-one-vertical rhythm while a live drag can grow
-// by one canvas pixel instead of waiting for a complete 3:1 block.
-func strictTanPointAt(x0, y0 int, step strictTanStep, majorSteps int) PixelPoint {
-	if majorSteps <= 0 || (step.X == 0 && step.Y == 0) {
-		return PixelPoint{X: x0, Y: y0}
-	}
-	ax, ay := absInt(step.X), absInt(step.Y)
-	sx, sy := 0, 0
-	if step.X < 0 {
-		sx = -1
-	} else if step.X > 0 {
-		sx = 1
-	}
-	if step.Y < 0 {
-		sy = -1
-	} else if step.Y > 0 {
-		sy = 1
-	}
-	if ax >= ay {
-		yOff := 0
-		if ax > 0 {
-			yOff = (majorSteps * ay) / ax
-		}
-		return PixelPoint{X: x0 + sx*majorSteps, Y: y0 + sy*yOff}
-	}
-	xOff := 0
-	if ay > 0 {
-		xOff = (majorSteps * ax) / ay
-	}
-	return PixelPoint{X: x0 + sx*xOff, Y: y0 + sy*majorSteps}
-}
-
-// strictTanMajorStepsFromPointer uses the dominant canvas axis as the live
-// length control. A shallow tan 1/3 or 1/4 line therefore gains exactly one
-// path pixel whenever the pointer advances one canvas pixel horizontally; a
-// steep line does the same vertically. The minor pointer coordinate chooses
-// the nearest allowed ratio but cannot make the endpoint jump by a whole motif.
-func strictTanMajorStepsFromPointer(x0, y0, x1, y1 int, step strictTanStep) int {
-	ax, ay := absInt(step.X), absInt(step.Y)
-	if ax == 0 && ay == 0 {
-		return 0
-	}
-	if ax >= ay {
-		if step.X < 0 {
-			return max(0, x0-x1)
-		}
-		return max(0, x1-x0)
-	}
-	if step.Y < 0 {
-		return max(0, y0-y1)
-	}
-	return max(0, y1-y0)
-}
-
-// maxStrictTanMajorSteps clips the staircase without changing its phase. The
-// dominant coordinate advances once per raster step; the minor coordinate is
-// floor(k*minor/major), so the formulas below find the last k still inside the
-// canvas exactly rather than clipping a completed line afterward.
-func maxStrictTanMajorSteps(x0, y0 int, step strictTanStep, width, height int) int {
-	ax, ay := absInt(step.X), absInt(step.Y)
-	if ax == 0 && ay == 0 {
-		return 0
-	}
-	xAvail, yAvail := 0, 0
-	if step.X > 0 {
-		xAvail = width - 1 - x0
-	} else if step.X < 0 {
-		xAvail = x0
-	} else {
-		xAvail = int(^uint(0) >> 2)
-	}
-	if step.Y > 0 {
-		yAvail = height - 1 - y0
-	} else if step.Y < 0 {
-		yAvail = y0
-	} else {
-		yAvail = int(^uint(0) >> 2)
-	}
-	if ax >= ay {
-		limit := xAvail
-		if ay > 0 {
-			minorLimit := ((yAvail+1)*ax - 1) / ay
-			limit = min(limit, minorLimit)
-		}
-		return max(0, limit)
-	}
-	limit := yAvail
-	if ax > 0 {
-		minorLimit := ((xAvail+1)*ay - 1) / ax
-		limit = min(limit, minorLimit)
-	}
-	return max(0, limit)
-}
-
-// strictTanPixelPrefix returns every successive native canvas pixel from the
-// starting point through majorSteps. A partial final motif is intentional: it
-// is what lets the preview and committed line grow one dot at a time. All full
-// rows/columns before that tail still obey the selected exact integer ratio.
-func strictTanPixelPrefix(x0, y0 int, step strictTanStep, majorSteps int) []PixelPoint {
-	majorSteps = max(0, majorSteps)
-	points := make([]PixelPoint, 0, majorSteps+1)
-	for k := 0; k <= majorSteps; k++ {
-		points = append(points, strictTanPointAt(x0, y0, step, k))
-	}
-	return points
-}
-
-func (a *App) constrainedStrictTanGeometry(x0, y0, x1, y1 int) ([]PixelPoint, int, int, strictTanStep, int) {
-	dx, dy := float64(x1-x0), float64(y1-y0)
-	step := nearestStrictTanStep(dx, dy)
-	majorSteps := strictTanMajorStepsFromPointer(x0, y0, x1, y1, step)
-	majorSteps = clamp(majorSteps, 0, maxStrictTanMajorSteps(x0, y0, step, a.canvas.W, a.canvas.H))
-	points := strictTanPixelPrefix(x0, y0, step, majorSteps)
-	last := points[len(points)-1]
-	return points, last.X, last.Y, step, majorSteps
-}
-
-func (a *App) constrainedStrictTanPath(x0, y0, x1, y1 int) ([]PixelPoint, int, int) {
-	points, nx, ny, _, _ := a.constrainedStrictTanGeometry(x0, y0, x1, y1)
-	return points, nx, ny
-}
-
-func (a *App) constrainedLineEndpoint(x0, y0, x1, y1 int, constrain bool) (int, int) {
-	if !constrain || (x0 == x1 && y0 == y1) {
-		return clamp(x1, 0, a.canvas.W-1), clamp(y1, 0, a.canvas.H-1)
-	}
-	dx, dy := float64(x1-x0), float64(y1-y0)
-	length := math.Hypot(dx, dy)
-	if a.lineConstraintMode == LineConstraintTanN {
-		_, nx, ny := a.constrainedStrictTanPath(x0, y0, x1, y1)
-		return nx, ny
-	}
-	ux, uy := nearestLineDirection(dx, dy, a.lineConstraintMode)
-	if ux == 0 && uy == 0 {
-		return x0, y0
-	}
-	maxLength := length
-	if ux > 0 {
-		maxLength = math.Min(maxLength, float64(a.canvas.W-1-x0)/ux)
-	} else if ux < 0 {
-		maxLength = math.Min(maxLength, float64(0-x0)/ux)
-	}
-	if uy > 0 {
-		maxLength = math.Min(maxLength, float64(a.canvas.H-1-y0)/uy)
-	} else if uy < 0 {
-		maxLength = math.Min(maxLength, float64(0-y0)/uy)
-	}
-	if maxLength < 0 {
-		maxLength = 0
-	}
-	nx := x0 + int(math.Round(ux*maxLength))
-	ny := y0 + int(math.Round(uy*maxLength))
-	return clamp(nx, 0, a.canvas.W-1), clamp(ny, 0, a.canvas.H-1)
-}
-
-func translatePixelPath(points []PixelPoint, dx, dy int) []PixelPoint {
-	if len(points) == 0 || (dx == 0 && dy == 0) {
-		return points
-	}
-	out := make([]PixelPoint, len(points))
-	for i, p := range points {
-		out[i] = PixelPoint{X: p.X + dx, Y: p.Y + dy}
-	}
-	return out
-}
-
 // drawRasterLineAt calculates constraints in full-canvas coordinates and only
 // translates the finished raster geometry into a small preview canvas.  This
 // guarantees that boundary clipping, strict tan staircases, parity and AA are
 // identical between the A209 dirty-region preview and final commit.
-func (a *App) drawRasterLineAt(c *Canvas, x0, y0, x1, y1 int, constrain bool, col uint32, originX, originY int) (int, int) {
-	if constrain && a.lineConstraintMode == LineConstraintTanN {
-		points, nx, ny, step, majorSteps := a.constrainedStrictTanGeometry(x0, y0, x1, y1)
-		points = translatePixelPath(points, -originX, -originY)
-		c.DrawStyledStrictTanPath(points, step.X, step.Y, majorSteps, a.lineSize, a.lineAntialias, col)
-		return nx, ny
-	}
-	nx, ny := a.constrainedLineEndpoint(x0, y0, x1, y1, constrain)
-	c.DrawStyledLine(x0-originX, y0-originY, nx-originX, ny-originY, a.lineSize, a.lineAntialias, col)
-	return nx, ny
-}
 
 func (a *App) drawRasterLine(c *Canvas, x0, y0, x1, y1 int, constrain bool, col uint32) (int, int) {
 	return a.drawRasterLineAt(c, x0, y0, x1, y1, constrain, col, 0, 0)
@@ -11270,46 +10571,6 @@ func (a *App) drawRasterLine(c *Canvas, x0, y0, x1, y1 int, constrain bool, col 
 // constrainedRectangleEndpoint keeps the drag point inside the canvas and,
 // while Shift is held, makes the outside width and height equal. The drag
 // endpoint remains an outside corner; stroke thickness is applied inward.
-func (a *App) constrainedRectangleEndpoint(x0, y0, x1, y1 int, square bool) (int, int) {
-	x1 = clamp(x1, 0, a.canvas.W-1)
-	y1 = clamp(y1, 0, a.canvas.H-1)
-	if !square || (x0 == x1 && y0 == y1) {
-		return x1, y1
-	}
-	dx, dy := x1-x0, y1-y0
-	sx, sy := 1, 1
-	if dx < 0 {
-		sx = -1
-	}
-	if dy < 0 {
-		sy = -1
-	}
-	side := max(absInt(dx), absInt(dy))
-	maxX := a.canvas.W - 1 - x0
-	if sx < 0 {
-		maxX = x0
-	}
-	maxY := a.canvas.H - 1 - y0
-	if sy < 0 {
-		maxY = y0
-	}
-	side = min(side, min(maxX, maxY))
-	return x0 + sx*side, y0 + sy*side
-}
-
-func rectangleOuterBounds(x0, y0, x1, y1 int) (left, top, right, bottom, width, height int) {
-	left, right = x0, x1
-	if left > right {
-		left, right = right, left
-	}
-	top, bottom = y0, y1
-	if top > bottom {
-		top, bottom = bottom, top
-	}
-	width = right - left + 1
-	height = bottom - top + 1
-	return
-}
 
 func (a *App) currentRectangleEndpoint() (int, int) {
 	return a.constrainedRectangleEndpoint(a.startX, a.startY, a.curX, a.curY, keyDown(VK_SHIFT))
@@ -11321,15 +10582,6 @@ func (a *App) drawRasterRectangle(c *Canvas, x0, y0, x1, y1 int, square bool, co
 
 // drawRasterRectangleAt uses the same native-pixel geometry as the committed
 // rectangle while allowing its temporary preview canvas to start at (originX,originY).
-func (a *App) drawRasterRectangleAt(c *Canvas, x0, y0, x1, y1 int, square bool, col uint32, originX, originY int) (int, int) {
-	nx, ny := a.constrainedRectangleEndpoint(x0, y0, x1, y1, square)
-	c.DrawRectOuter(x0-originX, y0-originY, nx-originX, ny-originY, a.rectangleSize, col)
-	if a.shapeShowCenter {
-		left, top, _, _, width, height := rectangleOuterBounds(x0, y0, nx, ny)
-		c.DrawCenterMarker(left-originX, top-originY, width, height, col)
-	}
-	return nx, ny
-}
 
 func (a *App) paintRasterRectanglePreview(hdc uintptr, ox, oy int) {
 	if a.tool != ToolRectangle || !a.preview || len(a.canvas.Pix) == 0 {
@@ -11346,22 +10598,14 @@ func (a *App) paintRasterRectanglePreview(hdc uintptr, ox, oy int) {
 	if a.drawButtonRight {
 		col = a.bg
 	}
-	a.drawRasterRectangleAt(preview, a.startX, a.startY, a.curX, a.curY, constrain, col, left, top)
+	a.paintOperationPreview(preview, left, top, func(target *Canvas, ink uint32) {
+		a.drawRasterRectangleAt(target, a.startX, a.startY, a.curX, a.curY, constrain, ink, left, top)
+	}, col)
 	a.blitRasterPreviewRegion(hdc, ox, oy, left, top, preview)
 	a.logVectorPreview("rectangle", started, preview)
 }
 func (a *App) currentEllipseEndpoint() (int, int) {
 	return a.constrainedRectangleEndpoint(a.startX, a.startY, a.curX, a.curY, keyDown(VK_SHIFT))
-}
-
-func (a *App) drawRasterEllipseAt(c *Canvas, x0, y0, x1, y1 int, circle bool, col uint32, originX, originY int) (int, int) {
-	nx, ny := a.constrainedRectangleEndpoint(x0, y0, x1, y1, circle)
-	c.DrawEllipseOuter(x0-originX, y0-originY, nx-originX, ny-originY, a.ellipseSize, col)
-	if a.shapeShowCenter {
-		left, top, _, _, width, height := rectangleOuterBounds(x0, y0, nx, ny)
-		c.DrawCenterMarker(left-originX, top-originY, width, height, col)
-	}
-	return nx, ny
 }
 
 func (a *App) drawRasterEllipse(c *Canvas, x0, y0, x1, y1 int, circle bool, col uint32) (int, int) {
@@ -11383,7 +10627,9 @@ func (a *App) paintRasterEllipsePreview(hdc uintptr, ox, oy int) {
 	if a.drawButtonRight {
 		col = a.bg
 	}
-	a.drawRasterEllipseAt(preview, a.startX, a.startY, a.curX, a.curY, circle, col, left, top)
+	a.paintOperationPreview(preview, left, top, func(target *Canvas, ink uint32) {
+		a.drawRasterEllipseAt(target, a.startX, a.startY, a.curX, a.curY, circle, ink, left, top)
+	}, col)
 	a.blitRasterPreviewRegion(hdc, ox, oy, left, top, preview)
 	a.logVectorPreview("ellipse", started, preview)
 }
@@ -11393,34 +10639,9 @@ func (a *App) paintRasterEllipsePreview(hdc uintptr, ox, oy int) {
 // neither endpoint is the right-angle vertex. Shift uses the exact same endpoint
 // constraint and tan staircase as ToolLine. The added corner is reached by moving
 // horizontally from the first endpoint and then vertically to the second.
-func (a *App) constrainedRightTriangleEndpoint(x0, y0, x1, y1 int, constrain bool) (int, int) {
-	return a.constrainedLineEndpoint(x0, y0, x1, y1, constrain)
-}
 
 func (a *App) currentRightTriangleEndpoint() (int, int) {
 	return a.constrainedRightTriangleEndpoint(a.startX, a.startY, a.curX, a.curY, keyDown(VK_SHIFT))
-}
-
-func (a *App) drawRasterRightTriangleAt(c *Canvas, x0, y0, x1, y1 int, constrain bool, col uint32, originX, originY int) (int, int) {
-	nx, ny := x1, y1
-	if constrain && a.lineConstraintMode == LineConstraintTanN {
-		// The triangle hypotenuse must use the SAME strict-tan renderer as
-		// ToolLine. The old per-microsegment square caps in DrawStyledPixelPath
-		// protruded as black "feathers" at thick triangle endpoints. The
-		// global tan-direction butt-cap clip removes these protrusions while
-		// keeping the exact integer staircase and the existing zero-AA policy.
-		points, tx, ty, step, majorSteps := a.constrainedStrictTanGeometry(x0, y0, x1, y1)
-		nx, ny = tx, ty
-		c.DrawStyledStrictTanPath(translatePixelPath(points, -originX, -originY), step.X, step.Y, majorSteps, a.rightTriangleSize, false, col)
-	} else {
-		nx, ny = a.constrainedRightTriangleEndpoint(x0, y0, x1, y1, constrain)
-		c.DrawStyledLine(x0-originX, y0-originY, nx-originX, ny-originY, a.rightTriangleSize, false, col)
-	}
-
-	cornerX, cornerY := rightTriangleLegCorner(x0, y0, nx, ny)
-	c.DrawStyledLine(x0-originX, y0-originY, cornerX-originX, cornerY-originY, a.rightTriangleSize, false, col)
-	c.DrawStyledLine(cornerX-originX, cornerY-originY, nx-originX, ny-originY, a.rightTriangleSize, false, col)
-	return nx, ny
 }
 
 func (a *App) drawRasterRightTriangle(c *Canvas, x0, y0, x1, y1 int, constrain bool, col uint32) (int, int) {
@@ -11442,7 +10663,9 @@ func (a *App) paintRasterRightTrianglePreview(hdc uintptr, ox, oy int) {
 	if a.drawButtonRight {
 		col = a.bg
 	}
-	a.drawRasterRightTriangleAt(preview, a.startX, a.startY, a.curX, a.curY, constrain, col, left, top)
+	a.paintOperationPreview(preview, left, top, func(target *Canvas, ink uint32) {
+		a.drawRasterRightTriangleAt(target, a.startX, a.startY, a.curX, a.curY, constrain, ink, left, top)
+	}, col)
 	a.blitRasterPreviewRegion(hdc, ox, oy, left, top, preview)
 	a.logVectorPreview("right-triangle", started, preview)
 }
@@ -11451,114 +10674,11 @@ func (a *App) currentArrowEndpoint() (int, int) {
 	return a.constrainedLineEndpoint(a.startX, a.startY, a.curX, a.curY, keyDown(VK_SHIFT))
 }
 
-func truncateArrowPixelPath(points []PixelPoint, x0, y0 int, head ArrowHeadGeometry, lineSize int) []PixelPoint {
-	if len(points) == 0 {
-		return nil
-	}
-	fullLength := math.Hypot(float64(points[len(points)-1].X-x0), float64(points[len(points)-1].Y-y0))
-	shaftLength := fullLength - head.Length
-	if shaftLength <= 0 {
-		return nil
-	}
-	last := -1
-	for i, p := range points {
-		forward := float64(p.X-x0)*head.UnitX + float64(p.Y-y0)*head.UnitY
-		if forward <= shaftLength+arrowShaftHeadOverlap(lineSize) {
-			last = i
-			continue
-		}
-		break
-	}
-	if last < 0 {
-		return nil
-	}
-	return points[:last+1]
-}
-
 // drawRasterArrow keeps the shaft constraint fully identical to the straight
 // line tool, but stops the square/butt-capped shaft at the rear edge of the
 // head. The filled head is then drawn from that rear edge to the tip, so no shaft
 // can pierce the point. The shaft bypasses AA in cardinal/45-degree directions;
 // the head classifies each of its own four edges independently.
-func translateArrowHeadGeometry(g ArrowHeadGeometry, dx, dy float64) ArrowHeadGeometry {
-	g.Tip.X, g.Tip.Y = g.Tip.X+dx, g.Tip.Y+dy
-	g.Base.X, g.Base.Y = g.Base.X+dx, g.Base.Y+dy
-	g.SideA.X, g.SideA.Y = g.SideA.X+dx, g.SideA.Y+dy
-	g.SideB.X, g.SideB.Y = g.SideB.X+dx, g.SideB.Y+dy
-	return g
-}
-
-func translateStrictTanShadow(s strictTanShadowSegment, dx, dy float64) strictTanShadowSegment {
-	s.X0, s.Y0 = s.X0+dx, s.Y0+dy
-	s.X1, s.Y1 = s.X1+dx, s.Y1+dy
-	return s
-}
-
-func (a *App) drawRasterArrowAt(c *Canvas, x0, y0, x1, y1 int, constrain bool, col uint32, originX, originY int) (int, int) {
-	nx, ny := x1, y1
-	var strictPath []PixelPoint
-	var strictStep strictTanStep
-	majorSteps := 0
-	strictMode := constrain && a.lineConstraintMode == LineConstraintTanN
-	if strictMode {
-		strictPath, nx, ny, strictStep, majorSteps = a.constrainedStrictTanGeometry(x0, y0, x1, y1)
-	} else {
-		nx, ny = a.constrainedLineEndpoint(x0, y0, x1, y1, constrain)
-	}
-
-	var head ArrowHeadGeometry
-	var ok bool
-	var fullShadow strictTanShadowSegment
-	shadowOK := false
-	if strictMode {
-		fullShadow, shadowOK = calculateStrictTanShadowSegment(x0, y0, strictStep.X, strictStep.Y, majorSteps, a.arrowLineSize)
-		if shadowOK {
-			head, ok = calculateArrowHeadDirected(
-				float64(nx), float64(ny),
-				fullShadow.UnitX, fullShadow.UnitY, fullShadow.Length,
-				a.arrowHeadSize, a.arrowLineSize,
-				fullShadow.PhaseOffsetX, fullShadow.PhaseOffsetY,
-			)
-		}
-	} else {
-		head, ok = calculateArrowHead(x0, y0, nx, ny, a.arrowHeadSize, a.arrowLineSize)
-	}
-	if !ok {
-		return nx, ny
-	}
-
-	shaftAA := arrowEffectiveAntialias(a.arrowAntialias, x0, y0, nx, ny)
-	if strictMode {
-		shaftAA = arrowEffectiveAntialias(a.arrowAntialias, 0, 0, strictStep.X, strictStep.Y)
-	}
-	sx, sy := arrowShaftJoinedLogicalEnd(head, a.arrowLineSize)
-	hasShaft := math.Hypot(float64(sx-x0), float64(sy-y0)) > 0.01
-	if !hasShaft {
-		sx, sy = x0, y0
-	}
-	var shaftPath []PixelPoint
-	if len(strictPath) > 0 {
-		shaftPath = truncateArrowPixelPath(strictPath, x0, y0, head, a.arrowLineSize)
-	}
-
-	var shaftShadow *strictTanShadowSegment
-	if strictMode && shadowOK && hasShaft {
-		shaftLength := fullShadow.Length - head.Length + arrowShaftHeadOverlap(a.arrowLineSize)
-		if shaftLength > 0 {
-			trimmed := fullShadow.prefix(shaftLength)
-			shaftShadow = &trimmed
-		}
-	}
-	localHead := translateArrowHeadGeometry(head, -float64(originX), -float64(originY))
-	localPath := translatePixelPath(shaftPath, -originX, -originY)
-	var localShadow *strictTanShadowSegment
-	if shaftShadow != nil {
-		translated := translateStrictTanShadow(*shaftShadow, -float64(originX), -float64(originY))
-		localShadow = &translated
-	}
-	c.DrawUnifiedVectorArrow(x0-originX, y0-originY, sx-originX, sy-originY, a.arrowLineSize, shaftAA, localHead, a.arrowAntialias, localPath, localShadow, col)
-	return nx, ny
-}
 
 func (a *App) drawRasterArrow(c *Canvas, x0, y0, x1, y1 int, constrain bool, col uint32) (int, int) {
 	return a.drawRasterArrowAt(c, x0, y0, x1, y1, constrain, col, 0, 0)
@@ -11585,6 +10705,10 @@ func (a *App) cloneRasterPreviewRegion(left, top, right, bottom int) (*Canvas, b
 		src := ((top+y)*a.canvas.W + left) * 4
 		dst := y * w * 4
 		copy(pix[dst:dst+w*4], a.canvas.Pix[src:src+w*4])
+	}
+	// Previews of a new shape must not erase older floating objects beneath it.
+	if len(a.objects) > 0 && !(a.previewOperation() == PaintInvert && !a.keepObjects) {
+		compositeObjectsToPixels(pix, w, h, left, top, a.objects)
 	}
 	return &Canvas{W: w, H: h, Pix: pix}, true
 }
@@ -11633,7 +10757,9 @@ func (a *App) paintRasterArrowPreview(hdc uintptr, ox, oy int) {
 	if a.drawButtonRight {
 		col = a.bg
 	}
-	a.drawRasterArrowAt(preview, a.startX, a.startY, a.curX, a.curY, constrain, col, left, top)
+	a.paintOperationPreview(preview, left, top, func(target *Canvas, ink uint32) {
+		a.drawRasterArrowAt(target, a.startX, a.startY, a.curX, a.curY, constrain, ink, left, top)
+	}, col)
 	a.blitRasterPreviewRegion(hdc, ox, oy, left, top, preview)
 	a.logVectorPreview("arrow", started, preview)
 }
@@ -11657,7 +10783,9 @@ func (a *App) paintRasterLinePreview(hdc uintptr, ox, oy int) {
 	if a.drawButtonRight {
 		col = a.bg
 	}
-	a.drawRasterLineAt(preview, a.startX, a.startY, a.curX, a.curY, constrain, col, left, top)
+	a.paintOperationPreview(preview, left, top, func(target *Canvas, ink uint32) {
+		a.drawRasterLineAt(target, a.startX, a.startY, a.curX, a.curY, constrain, ink, left, top)
+	}, col)
 	a.blitRasterPreviewRegion(hdc, ox, oy, left, top, preview)
 	a.logVectorPreview("line", started, preview)
 }
@@ -11720,11 +10848,9 @@ func (a *App) paintRasterCurvePreview(hdc uintptr, ox, oy int) {
 	if !ok {
 		return
 	}
-	col := a.fg
-	if a.drawButtonRight {
-		col = a.bg
-	}
-	a.drawRasterCurveAt(preview, a.curveActiveControlCount(), col, left, top)
+	a.paintOperationPreview(preview, left, top, func(target *Canvas, ink uint32) {
+		a.drawRasterCurveAt(target, a.curveActiveControlCount(), ink, left, top)
+	}, a.curvePaintColor)
 	a.blitRasterPreviewRegion(hdc, ox, oy, left, top, preview)
 	a.logVectorPreview("curve", started, preview)
 }
@@ -12226,34 +11352,6 @@ func (a *App) paintShapeCenterOption(hdc uintptr) {
 	}
 	tr := RECT{box.Right + 5, r.Top, r.Right, r.Bottom}
 	drawToolOptionText(hdc, "중심점 표시", tr, DT_LEFT|DT_VCENTER|DT_SINGLELINE, rgb(30, 30, 30), 9)
-}
-
-func shapeCenterMarkerBounds(left, top, width, height int) (mx0, my0, mx1, my1 int) {
-	mw := 1
-	mh := 1
-	if width%2 == 0 {
-		mw = 2
-	}
-	if height%2 == 0 {
-		mh = 2
-	}
-	mx0 = left + (width-mw)/2
-	my0 = top + (height-mh)/2
-	mx1 = mx0 + mw - 1
-	my1 = my0 + mh - 1
-	return
-}
-
-func (c *Canvas) DrawCenterMarker(left, top, width, height int, clr uint32) {
-	if width <= 0 || height <= 0 {
-		return
-	}
-	mx0, my0, mx1, my1 := shapeCenterMarkerBounds(left, top, width, height)
-	for y := my0; y <= my1; y++ {
-		for x := mx0; x <= mx1; x++ {
-			c.SetPixel(x, y, clr)
-		}
-	}
 }
 
 func (a *App) hitRectangleSizeOption(x, y int, rc RECT) (int, bool) {
@@ -13094,13 +12192,14 @@ func (a *App) paintToolbox(hdc uintptr, rc RECT) {
 	opt := RECT{toolboxOptionLeft, int32(optTop), toolboxOptionRight, int32(rc.Bottom - 8)}
 	fillUIRect(hdc, opt, rgb(255, 255, 255))
 	frameUIRect(hdc, opt, rgb(180, 180, 180))
-	if a.tool == ToolFreeSelect || a.tool == ToolRectSelect || a.tool == ToolText {
+	optionTool := a.selectedObjectOptionTool()
+	if optionTool == ToolFreeSelect || optionTool == ToolRectSelect || optionTool == ToolText {
 		opaqueRect, transparentRect := selectionOpacityOptionRects()
 		a.paintSelectionOpacityOption(hdc, opaqueRect, true, "불투명")
 		a.paintSelectionOpacityOption(hdc, transparentRect, false, "투명")
-	} else if isColorSelectionTool(a.tool) || a.tool == ToolFill {
+	} else if isColorSelectionTool(a.tool) || optionTool == ToolFill {
 		a.paintColorToleranceOptions(hdc, rc, optTop)
-	} else if a.tool == ToolMagnifier {
+	} else if optionTool == ToolMagnifier {
 		y := optTop + 4
 		for _, z := range a.zoomLevels {
 			r := RECT{12, int32(y), 86, int32(y + 18)}
@@ -13118,9 +12217,9 @@ func (a *App) paintToolbox(hdc uintptr, rc RECT) {
 				break
 			}
 		}
-	} else if a.tool == ToolCurve {
+	} else if optionTool == ToolCurve {
 		a.paintCurveOptions(hdc, rc, optTop)
-	} else if a.tool == ToolEraser {
+	} else if optionTool == ToolEraser {
 		label := RECT{10, int32(optTop + 6), 88, int32(optTop + 26)}
 		drawUIText(hdc, fmt.Sprintf("%d px", a.eraserSize), label, DT_CENTER|DT_VCENTER|DT_SINGLELINE, rgb(0, 0, 0))
 		preview := RECT{25, int32(optTop + 29), 73, int32(optTop + 77)}
@@ -13209,18 +12308,21 @@ func (a *App) paintToolbox(hdc uintptr, rc RECT) {
 		thumb := RECT{int32(trackX - 6), int32(thumbY - 4), int32(trackX + 7), int32(thumbY + 5)}
 		fillUIRect(hdc, thumb, rgb(205, 230, 255))
 		frameUIRect(hdc, thumb, rgb(0, 120, 215))
-	} else if a.tool == ToolPencil || a.tool == ToolBrush || a.tool == ToolAirbrush {
+	} else if optionTool == ToolPencil || optionTool == ToolBrush || optionTool == ToolAirbrush {
 		a.paintBrushOptions(hdc, rc, optTop)
-	} else if a.tool == ToolLine {
+	} else if optionTool == ToolLine {
 		a.paintLineOptions(hdc, rc, optTop)
-	} else if a.tool == ToolRectangle {
+	} else if optionTool == ToolRectangle {
 		a.paintRectangleOptions(hdc, rc, optTop)
-	} else if a.tool == ToolEllipse {
+	} else if optionTool == ToolEllipse {
 		a.paintEllipseOptions(hdc, rc, optTop)
-	} else if a.tool == ToolRightTriangle {
+	} else if optionTool == ToolRightTriangle {
 		a.paintRightTriangleOptions(hdc, rc, optTop)
-	} else if a.tool == ToolArrow {
+	} else if optionTool == ToolArrow {
 		a.paintArrowOptions(hdc, rc, optTop)
+	}
+	if supportsKeepObjects(a.tool) {
+		a.paintObjectKeepCheckbox(hdc, rc)
 	}
 }
 
@@ -13340,6 +12442,10 @@ func drawUserToolIconPixels(hdc uintptr, cx, cy int, pixels *[userToolIconWidth 
 }
 
 func (a *App) drawToolIcon(hdc uintptr, t Tool, cx, cy int) {
+	if t == ToolObjectSelect {
+		a.drawObjectSelectionToolIcon(hdc, cx, cy)
+		return
+	}
 	if icon, ok := selectionToolIconPattern(t); ok {
 		drawSelectionToolIconPattern(hdc, cx, cy, icon)
 		return
@@ -13414,7 +12520,7 @@ func (a *App) drawToolIcon(hdc uintptr, t Tool, cx, cy int) {
 
 func paletteTransparentRect(rc RECT) RECT {
 	startX := 70
-	left := startX + paletteCellColumns*paletteCellSize + 2
+	left := startX + paletteCellColumns*paletteCellSize + 2 + 48
 	return RECT{int32(left), rc.Top + 4, int32(left + 46), rc.Top + 50}
 }
 
@@ -13447,9 +12553,21 @@ func (a *App) paletteColorArea(rc RECT, index int) RECT {
 	top := int(rc.Top) + 4 + row*paletteCellSize
 	return RECT{int32(left), int32(top), int32(left + 22), int32(top + 22)}
 }
+
+// Both special swatches share one geometry source. They are 46x46 pixels,
+// separated by only 2 pixels, immediately after the normal/custom palette.
+// This same geometry is used for rendering and mouse hit testing.
+func (a *App) paletteSpecialAreas(rc RECT) (invert RECT, transparent RECT) {
+	left := int32(70 + paletteDisplayColumns(a.paletteDisplayMode(), a.paletteVisibleCount())*paletteCellSize + 2)
+	top := rc.Top + 4
+	invert = RECT{left, top, left + 46, top + 46}
+	transparent = RECT{left + 48, top, left + 94, top + 46}
+	return
+}
+
 func (a *App) paletteTransparentArea(rc RECT) RECT {
-	left := 70 + paletteDisplayColumns(a.paletteDisplayMode(), a.paletteVisibleCount())*paletteCellSize + 2
-	return RECT{int32(left), rc.Top + 4, int32(left + 46), rc.Top + 50}
+	_, transparent := a.paletteSpecialAreas(rc)
+	return transparent
 }
 
 func paletteBackgroundRect(rc RECT) RECT {
@@ -13487,9 +12605,15 @@ func (a *App) paintPalette(hdc uintptr, rc RECT) {
 	// Overlapping current-color boxes.
 	back := paletteBackgroundRect(rc)
 	paintColorBox(hdc, back, a.bg)
+	if a.chosenOperation(true) == PaintInvert {
+		a.paintInvertIcon(hdc, back)
+	}
 	frameRect(hdc, back, uiColor(rgb(100, 100, 100)))
 	front := paletteForegroundRect(rc)
 	paintColorBox(hdc, front, a.fg)
+	if a.chosenOperation(false) == PaintInvert {
+		a.paintInvertIcon(hdc, front)
+	}
 	frameRect(hdc, front, uiColor(rgb(40, 40, 40)))
 
 	colors := a.paletteColors()
@@ -13510,7 +12634,19 @@ func (a *App) paintPalette(hdc uintptr, rc RECT) {
 			drawToolOptionText(hdc, label, r, DT_CENTER|DT_VCENTER|DT_SINGLELINE, labelColor, 11)
 		}
 	}
-	tr := a.paletteTransparentArea(rc)
+	// Dedicated adjacent Invert / Transparent swatches; do not treat Invert
+	// as one of the ordinary RGB or indexed palette entries.
+	ir, tr := a.paletteSpecialAreas(rc)
+	a.paintInvertIcon(hdc, ir)
+	frameRect(hdc, ir, uiColor(rgb(75, 75, 75)))
+	if a.chosenOperation(false) == PaintInvert || a.chosenOperation(true) == PaintInvert {
+		col := uiColor(rgb(0, 120, 215))
+		if a.chosenOperation(false) != PaintInvert {
+			col = uiColor(rgb(195, 90, 20))
+		}
+		frameRect(hdc, ir, col)
+		frameRect(hdc, RECT{ir.Left + 1, ir.Top + 1, ir.Right - 1, ir.Bottom - 1}, col)
+	}
 	drawCheckerboard(hdc, tr, 8)
 	frameRect(hdc, tr, uiColor(rgb(100, 100, 100)))
 }
@@ -13854,6 +12990,10 @@ func (a *App) paintThumbnailPanel(hdc uintptr, panel RECT) {
 	dh := int(imageRect.Bottom - imageRect.Top)
 
 	pix := a.canvas.displayPixels(1)
+	if len(a.objects) > 0 {
+		a.paintObjectThumbnail(hdc, imageRect, pix)
+		pix = nil
+	}
 	bmi := BITMAPINFO{BmiHeader: BITMAPINFOHEADER{BiSize: uint32(unsafe.Sizeof(BITMAPINFOHEADER{})), BiWidth: int32(a.canvas.W), BiHeight: -int32(a.canvas.H), BiPlanes: 1, BiBitCount: 32, BiCompression: BI_RGB}}
 	procSetStretchBltMode.Call(hdc, COLORONCOLOR)
 	if len(pix) > 0 {
@@ -14102,11 +13242,23 @@ func (a *App) paintTextPanel(hdc uintptr, panel RECT) {
 	}
 	a.paintPanelFrame(hdc, panel, "텍스트")
 	labelColor := rgb(75, 75, 75)
-	drawUIText(hdc, "글꼴", RECT{panel.Left + 8, panel.Top + 20, panel.Left + 52, panel.Top + 39}, DT_LEFT|DT_VCENTER|DT_SINGLELINE, labelColor)
-	drawUIText(hdc, "크기", RECT{panel.Left + 8, panel.Top + 57, panel.Left + 52, panel.Top + 76}, DT_LEFT|DT_VCENTER|DT_SINGLELINE, labelColor)
+	drawTextPanelCaption(hdc, "글꼴", RECT{panel.Left + 8, panel.Top + 20, panel.Left + 52, panel.Top + 39}, labelColor)
+	drawTextPanelCaption(hdc, "크기", RECT{panel.Left + 8, panel.Top + 57, panel.Left + 52, panel.Top + 76}, labelColor)
 	drawUIText(hdc, "미리", RECT{panel.Left + 119, panel.Top + 52, panel.Left + 162, panel.Top + 68}, DT_LEFT|DT_VCENTER|DT_SINGLELINE, labelColor)
 	drawUIText(hdc, "보기", RECT{panel.Left + 119, panel.Top + 68, panel.Left + 162, panel.Top + 84}, DT_LEFT|DT_VCENTER|DT_SINGLELINE, labelColor)
-	drawUIText(hdc, "스타일", RECT{panel.Left + 8, panel.Top + 95, panel.Left + 52, panel.Top + 118}, DT_LEFT|DT_VCENTER|DT_SINGLELINE, labelColor)
+	drawTextPanelCaption(hdc, "스타일", RECT{panel.Left + 8, panel.Top + 95, panel.Left + 52, panel.Top + 118}, labelColor)
+}
+
+func drawTextPanelCaption(hdc uintptr, caption string, rc RECT, color uint32) {
+	font := createGDIFont("맑은 고딕", 11, false, false, false)
+	if font == 0 {
+		drawUIText(hdc, caption, rc, DT_LEFT|DT_VCENTER|DT_SINGLELINE, color)
+		return
+	}
+	old, _, _ := procSelectObject.Call(hdc, font)
+	drawTextUsingSelectedFont(hdc, caption, rc, DT_LEFT|DT_VCENTER|DT_SINGLELINE, uiColor(color))
+	procSelectObject.Call(hdc, old)
+	procDeleteObject.Call(font)
 }
 
 func (a *App) hitTextPanel(mx, my int, client RECT) string {
@@ -14611,8 +13763,14 @@ func (a *App) setSelectionOpaque(opaque bool) {
 
 func (a *App) paintSelectionOpacityOption(hdc uintptr, rc RECT, opaque bool, label string) {
 	selected := a.opaque == opaque
+	previewFG, previewBG := a.fg, a.bg
 	if a.tool == ToolText {
 		selected = a.textTool.Opaque == opaque
+	} else if a.tool == ToolObjectSelect && len(a.selectedObjectIndices()) == 1 {
+		if o := a.selectedObject(); o != nil && o.Kind == ToolText {
+			selected = o.Opaque == opaque
+			previewFG, previewBG = o.FG, o.BG
+		}
 	}
 	if selected {
 		fillUIRect(hdc, rc, rgb(205, 230, 255))
@@ -14627,9 +13785,9 @@ func (a *App) paintSelectionOpacityOption(hdc uintptr, rc RECT, opaque bool, lab
 	drawCheckerboard(hdc, preview, 5)
 	selectionRect := RECT{preview.Left + 5, preview.Top + 4, preview.Right - 5, preview.Bottom - 4}
 	if opaque {
-		fillUIRect(hdc, selectionRect, gdiPreviewColor(a.bg))
+		fillUIRect(hdc, selectionRect, gdiPreviewColor(previewBG))
 	}
-	fg := gdiPreviewColor(a.fg)
+	fg := gdiPreviewColor(previewFG)
 	fillUIRect(hdc, RECT{selectionRect.Left + 3, selectionRect.Top + 3, selectionRect.Left + 13, selectionRect.Top + 13}, fg)
 	fillUIRect(hdc, RECT{selectionRect.Right - 14, selectionRect.Bottom - 13, selectionRect.Right - 4, selectionRect.Bottom - 3}, fg)
 	frameUIRect(hdc, selectionRect, rgb(35, 35, 35))
@@ -14661,11 +13819,34 @@ func (a *App) commitCurveWithControls(activeControls int, reason string) bool {
 	if !a.curveUndoPending {
 		return false
 	}
-	col := a.fg
-	if a.drawButtonRight {
-		col = a.bg
+	savedStage, savedDrawing := a.curveStage, a.drawing
+	a.curveStage = activeControls + 1
+	a.drawing = false
+	var obj MovableObject
+	var keep bool
+	if a.dejavu == nil && !a.indexedMode && a.curveOperation == PaintTransparent {
+		var ok bool
+		obj, ok = a.makeVectorObject(ToolCurve, 0, 0, 0, 0, false, 0xFFFFFF)
+		if !ok {
+			a.curveStage, a.drawing = savedStage, savedDrawing
+			a.statusText = localizeUI("투명 곡선 영역을 만들지 못했습니다. 크기를 줄여 다시 시도하십시오.")
+			return false
+		}
+		a.applyTransparentShapeMask(obj)
+	} else if a.dejavu == nil && !a.indexedMode && (a.keepObjects || a.curveOperation == PaintInvert) {
+		obj, keep = a.makeVectorObject(ToolCurve, 0, 0, 0, 0, false, a.curvePaintColor)
+		if !keep {
+			a.curveStage, a.drawing = savedStage, savedDrawing
+			a.statusText = localizeUI("객체가 너무 커서 확정하지 못했습니다. 크기를 줄여 다시 시도하십시오.")
+			return false
+		}
+		if !a.keepObjects {
+			compositeObjectsToPixels(a.canvas.Pix, a.canvas.W, a.canvas.H, 0, 0, []MovableObject{obj})
+			keep = false
+		}
+	} else {
+		a.drawRasterCurve(a.canvas, activeControls, a.curvePaintColor)
 	}
-	a.drawRasterCurve(a.canvas, activeControls, col)
 	a.curveStage = 0
 	a.curveUndoPending = false
 	a.curveBaseShiftConstrained = false
@@ -14673,7 +13854,12 @@ func (a *App) commitCurveWithControls(activeControls int, reason string) bool {
 	a.drawing = false
 	procReleaseCapture.Call()
 	a.markDirty()
-	a.recordHistory("곡선")
+	if keep {
+		a.addMovableObject(obj)
+	} else {
+		a.recordHistory("곡선")
+	}
+	a.undo.DiscardLast()
 	if a.tool == ToolCurve {
 		a.statusText = fmt.Sprintf("곡선을 굽힘점 %d개 상태로 확정했습니다.", activeControls)
 	}
@@ -14736,7 +13922,7 @@ func (a *App) stopScreenEyedropper() {
 
 func (a *App) restoreToolAfterEyedropper() {
 	tool := a.eyedropperReturnTool
-	if tool == ToolEyedropper || tool < ToolFreeSelect || tool > ToolArrow {
+	if tool == ToolEyedropper || tool < ToolFreeSelect || tool > ToolObjectSelect {
 		tool = ToolPencil
 	}
 	a.tool = tool
@@ -14769,8 +13955,10 @@ func (a *App) sampleScreenColor(screenX, screenY int, right bool) bool {
 	}
 	if right {
 		a.bg = uint32(c)
+		a.bgOperation = paintMode(PaintRGB, a.bg)
 	} else {
 		a.fg = uint32(c)
+		a.fgOperation = paintMode(PaintRGB, a.fg)
 	}
 	which := "전경색"
 	if right {
@@ -14816,6 +14004,33 @@ func (a *App) pollScreenEyedropper() {
 }
 
 func (a *App) onMouseDoubleClick(mx, my int) {
+	if a.tool == ToolObjectSelect && a.dejavu == nil {
+		ix, iy, inside := a.clientToImage(mx, my)
+		if inside {
+			i := a.hitMovableObject(ix, iy)
+			if i >= 0 && a.objects[i].GroupID != 0 && a.objectIsolatedGroup != a.objects[i].GroupID {
+				if a.objectDragging {
+					a.endObjectMove(0, 0, false)
+				}
+				a.objectIsolatedGroup = a.objects[i].GroupID
+				a.objectMultiSelected = nil
+				a.objectSelected = i
+				a.syncSelectedObjectOptions()
+				a.statusText = localizeUI("그룹 내부 편집: 이 개체만 선택했습니다. F2/더블클릭으로 텍스트 편집, Esc는 그룹으로 돌아갑니다.")
+				a.requestObjectSelectionUIRepaint()
+				a.requestStatusRepaint()
+				return
+			}
+			if i >= 0 && a.objects[i].Kind == ToolText {
+				a.objectSelected = i
+				a.objectMultiSelected = nil
+				a.requestObjectSelectionUIRepaint()
+				if a.beginEditingSelectedTextObject() {
+					return
+				}
+			}
+		}
+	}
 	var client RECT
 	procGetClientRect.Call(a.hwnd, uintptr(unsafe.Pointer(&client)))
 	if a.bitmapView || !a.showPalette {
@@ -14842,6 +14057,15 @@ func (a *App) onMouseDoubleClick(mx, my int) {
 }
 
 func (a *App) onMouseDown(mx, my int, right bool) {
+	if a.objectDragging {
+		if right {
+			a.endObjectMove(0, 0, false)
+		}
+		return
+	}
+	// Clicking the canvas does not necessarily transfer keyboard focus away
+	// from a child EDIT. Commit a numeric transaction before canvas actions.
+	a.commitPendingTextSize("canvas mouse down")
 	logf("MOUSEDOWN client=%d,%d right=%v tool=%d zoom=%d scroll=%d,%d", mx, my, right, a.tool, a.zoom, a.scrollX, a.scrollY)
 	if a.textCommitClickPending {
 		// Defensive guard for duplicate button-down delivery while the commit-only
@@ -14974,7 +14198,7 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 			if !right && index >= 0 && index < len(a.clipboardHistory) {
 				a.clipboardSelected = index
 				a.clipboard = a.clipboardHistory[index].Image
-				a.pasteClipboardImage(a.clipboardHistory[index].Image, fmt.Sprintf("클립보드 기록 %d", index+1))
+				a.pasteHistoryClipboard(index)
 			} else if index >= len(a.clipboardHistory) {
 				a.statusText = "이 클립보드 칸은 비어 있습니다. Print Screen 또는 다른 프로그램에서 이미지를 복사하십시오."
 				invalidate(a.hwnd)
@@ -15076,6 +14300,7 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 			} else if a.tool == ToolMagnifier {
 				a.clearZoomPreview()
 			}
+			a.objectArmed = 0
 			a.tool = t
 			if t == ToolText {
 				a.showTextPanel = true
@@ -15100,8 +14325,10 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 				a.statusText = fmt.Sprintf("확대 대상 %dx: 마우스를 움직여 점선 영역을 확인하고 클릭하십시오. 오른쪽 클릭은 한 단계 축소합니다.", a.zoomTarget)
 			} else if t == ToolFreeSelect {
 				a.statusText = "자유 선택: 원하는 영역의 둘레를 그리십시오. Shift를 누르면 기존 선택에 추가합니다."
+			} else if t == ToolObjectSelect {
+				a.statusText = localizeUI(objectSelectionGuidance)
 			} else if t == ToolRectSelect {
-				a.statusText = "사각 선택: 영역을 끌어 지정하십시오. Shift를 누르면 기존 선택에 추가합니다."
+				a.statusText = "사각 선택: 픽셀 영역을 끌어 선택합니다. Shift는 기존 선택에 추가합니다."
 			} else if t == ToolColorRegionSelect {
 				a.statusText = fmt.Sprintf("색 영역 선택: 클릭한 색과 비슷한 인접 영역만 선택합니다. 허용 불일치 %d, Shift=기존 선택에 추가.", a.colorTolerance)
 			} else if t == ToolColorAllSelect {
@@ -15164,7 +14391,12 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 				return
 			}
 		}
-		if a.tool == ToolPencil || a.tool == ToolBrush || a.tool == ToolAirbrush {
+		if !right && a.toggleObjectKeepAt(toolX, toolY, toolRC) {
+			invalidate(a.hwnd)
+			return
+		}
+		optionTool := a.selectedObjectOptionTool()
+		if optionTool == ToolPencil || a.tool == ToolBrush || a.tool == ToolAirbrush {
 			if shape, ok := a.hitBrushShapeOption(toolX, toolY); ok {
 				a.setBrushShape(shape)
 				return
@@ -15177,7 +14409,7 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 				return
 			}
 		}
-		if a.tool == ToolEraser {
+		if optionTool == ToolEraser {
 			if size, ok := a.hitEraserSizeOption(toolX, toolY, toolRC); ok {
 				a.setEraserSize(size)
 				a.adjustingEraserSize = true
@@ -15186,11 +14418,12 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 				return
 			}
 		}
-		if a.tool == ToolLine {
+		if optionTool == ToolLine {
 			if mode, ok := a.hitLineConstraintOption(toolX, toolY); ok {
 				a.lineConstraintMode = mode
 				a.statusText = fmt.Sprintf("Shift 직선 제한을 %s 방식으로 설정했습니다.", lineConstraintNames[mode])
 				logf("LINE constraint=%d name=%q", mode, lineConstraintNames[mode])
+				a.applySelectedObjectToolOptions(true)
 				invalidate(a.hwnd)
 				return
 			}
@@ -15202,18 +14435,21 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 				}
 				a.statusText = "직선 안티에일리어싱: " + state
 				logf("LINE antialias=%v", aa)
+				a.applySelectedObjectToolOptions(true)
 				invalidate(a.hwnd)
 				return
 			}
 			if size, ok := a.hitLineSizeOption(toolX, toolY, toolRC); ok {
+				a.beginSelectedObjectOptionDrag()
 				a.setLineSize(size)
+				a.applySelectedObjectToolOptions(false)
 				a.adjustingLineSize = true
 				procSetCapture.Call(a.hwnd)
 				invalidate(a.hwnd)
 				return
 			}
 		}
-		if a.tool == ToolCurve {
+		if optionTool == ToolCurve {
 			if count, ok := a.hitCurveBendOption(toolX, toolY); ok {
 				if a.curveUndoPending {
 					a.finishCurveEarlyOrCancel("bend-count slider")
@@ -15232,11 +14468,14 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 				}
 				a.statusText = "곡선 안티에일리어싱: " + state
 				logf("CURVE antialias=%v", aa)
+				a.applySelectedObjectToolOptions(true)
 				invalidate(a.hwnd)
 				return
 			}
 			if size, ok := a.hitCurveSizeOption(toolX, toolY, toolRC); ok {
+				a.beginSelectedObjectOptionDrag()
 				a.setCurveSize(size)
+				a.applySelectedObjectToolOptions(false)
 				a.adjustingCurveSize = true
 				procSetCapture.Call(a.hwnd)
 				invalidate(a.hwnd)
@@ -15244,14 +14483,17 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 			}
 		}
 
-		if a.tool == ToolRectangle {
+		if optionTool == ToolRectangle {
 			if a.hitShapeCenterOption(toolX, toolY) {
 				a.toggleShapeCenter()
+				a.applySelectedObjectToolOptions(true)
 				invalidate(a.hwnd)
 				return
 			}
 			if size, ok := a.hitRectangleSizeOption(toolX, toolY, toolRC); ok {
+				a.beginSelectedObjectOptionDrag()
 				a.setRectangleSize(size)
+				a.applySelectedObjectToolOptions(false)
 				a.adjustingRectangleSize = true
 				procSetCapture.Call(a.hwnd)
 				invalidate(a.hwnd)
@@ -15259,14 +14501,17 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 			}
 		}
 
-		if a.tool == ToolEllipse {
+		if optionTool == ToolEllipse {
 			if a.hitShapeCenterOption(toolX, toolY) {
 				a.toggleShapeCenter()
+				a.applySelectedObjectToolOptions(true)
 				invalidate(a.hwnd)
 				return
 			}
 			if size, ok := a.hitEllipseSizeOption(toolX, toolY, toolRC); ok {
+				a.beginSelectedObjectOptionDrag()
 				a.setEllipseSize(size)
+				a.applySelectedObjectToolOptions(false)
 				a.adjustingEllipseSize = true
 				procSetCapture.Call(a.hwnd)
 				invalidate(a.hwnd)
@@ -15274,16 +14519,19 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 			}
 		}
 
-		if a.tool == ToolRightTriangle {
+		if optionTool == ToolRightTriangle {
 			if mode, ok := a.hitRightTriangleConstraintOption(toolX, toolY); ok {
 				a.lineConstraintMode = mode
 				a.statusText = fmt.Sprintf("Shift 직각삼각형 제한을 %s 방식으로 설정했습니다.", lineConstraintNames[mode])
 				logf("RIGHT_TRIANGLE constraint=%d name=%q", mode, lineConstraintNames[mode])
+				a.applySelectedObjectToolOptions(true)
 				invalidate(a.hwnd)
 				return
 			}
 			if size, ok := a.hitRightTriangleSizeOption(toolX, toolY, toolRC); ok {
+				a.beginSelectedObjectOptionDrag()
 				a.setRightTriangleSize(size)
+				a.applySelectedObjectToolOptions(false)
 				a.adjustingRightTriangleSize = true
 				procSetCapture.Call(a.hwnd)
 				invalidate(a.hwnd)
@@ -15291,11 +14539,12 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 			}
 		}
 
-		if a.tool == ToolArrow {
+		if optionTool == ToolArrow {
 			if head, ok := a.hitArrowHeadOption(toolX, toolY); ok {
 				a.arrowHeadSize = head
 				a.statusText = fmt.Sprintf("화살표 머리 크기를 %d단계로 설정했습니다.", head+1)
 				logf("ARROW head=%d", head)
+				a.applySelectedObjectToolOptions(true)
 				invalidate(a.hwnd)
 				return
 			}
@@ -15303,6 +14552,7 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 				a.lineConstraintMode = mode
 				a.statusText = fmt.Sprintf("Shift 화살표 제한을 %s 방식으로 설정했습니다.", lineConstraintNames[mode])
 				logf("ARROW constraint=%d name=%q", mode, lineConstraintNames[mode])
+				a.applySelectedObjectToolOptions(true)
 				invalidate(a.hwnd)
 				return
 			}
@@ -15314,11 +14564,14 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 				}
 				a.statusText = "화살표 안티에일리어싱: " + state
 				logf("ARROW antialias=%v", aa)
+				a.applySelectedObjectToolOptions(true)
 				invalidate(a.hwnd)
 				return
 			}
 			if size, ok := a.hitArrowLineSizeOption(toolX, toolY, toolRC); ok {
+				a.beginSelectedObjectOptionDrag()
 				a.setArrowLineSize(size)
+				a.applySelectedObjectToolOptions(false)
 				a.adjustingArrowLineSize = true
 				procSetCapture.Call(a.hwnd)
 				invalidate(a.hwnd)
@@ -15335,15 +14588,19 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 				return
 			}
 		}
-		if a.tool == ToolFreeSelect || a.tool == ToolRectSelect {
+		if optionTool == ToolFreeSelect || a.tool == ToolRectSelect {
 			if opaque, ok := a.hitSelectionOpacityOption(toolX, toolY); ok {
 				a.setSelectionOpaque(opaque)
 				return
 			}
 		}
-		if a.tool == ToolText {
+		if optionTool == ToolText {
 			if opaque, ok := a.hitSelectionOpacityOption(toolX, toolY); ok {
-				a.setTextOpaque(opaque)
+				if a.tool == ToolObjectSelect {
+					a.setSelectedTextObjectOpaque(opaque)
+				} else {
+					a.setTextOpaque(opaque)
+				}
 				return
 			}
 		}
@@ -15358,18 +14615,33 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 		if pointInRect(paletteX, paletteY, paletteForegroundRect(paletteRC)) || pointInRect(paletteX, paletteY, paletteBackgroundRect(paletteRC)) {
 			return
 		}
+		if pointInRect(paletteX, paletteY, a.paletteInvertArea(paletteRC)) {
+			a.chooseInvert(right)
+			return
+		}
 		if c, slot, ok := a.hitPalette(paletteX, paletteY, paletteRC); ok {
+			previousFG, previousOp := a.fg, a.chosenOperation(false)
 			which := "전경색"
 			if a.indexedPaletteActive() {
 				slot = -1 // indexed slots have a separate identity space
 			}
 			if right {
 				a.bg = c
+				a.bgOperation = paintMode(PaintRGB, c)
 				a.bgPaletteSlot = slot
 				which = "배경색"
 			} else {
 				a.fg = c
+				a.fgOperation = paintMode(PaintRGB, c)
 				a.fgPaletteSlot = slot
+			}
+			if !right && a.textTool.Active {
+				a.applyTextColorToSelection(previousFG, previousOp, c, paintMode(PaintRGB, c))
+			}
+			// When a single editable object is selected, a palette choice also
+			// changes that object's stored color; multiple groups only move/scale.
+			if a.tool == ToolObjectSelect {
+				a.changeSelectedObjectColor(c, paintMode(PaintRGB, c), right)
 			}
 			if isTransparentColor(c) {
 				a.statusText = which + "을 투명색으로 설정했습니다."
@@ -15382,6 +14654,18 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 		}
 	}
 	_ = ws
+	if a.tool == ToolObjectSelect {
+		if pointInRect(mx, my, ws) {
+			if right {
+				a.objectContextPending = true
+				a.objectContextX, a.objectContextY = mx, my
+				a.objectArmed = 0
+			} else {
+				a.beginObjectInteraction(mx, my)
+			}
+		}
+		return
+	}
 	if !right && a.tool != ToolMagnifier {
 		if h, ok := a.hitCanvasHandle(mx, my); ok {
 			if a.curveUndoPending {
@@ -15507,6 +14791,25 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 		a.requestCanvasRepaint(true)
 		return
 	}
+	if a.tool == ToolFill && a.dejavu == nil && len(a.objects) > 0 {
+		c, op := a.fg, a.chosenOperation(false)
+		if right {
+			c, op = a.bg, a.chosenOperation(true)
+		}
+		if i := a.bucketObjectAtPixel(ix, iy); i >= 0 {
+			if a.bucketChangeObject(i, ix, iy, c, op) {
+				return
+			}
+		}
+		if op != PaintInvert && a.bucketFillWithObjectBoundaries(ix, iy, c) {
+			return
+		}
+	}
+	if a.chosenOperation(right) == PaintInvert && (a.dejavu != nil || a.tool == ToolFill || a.tool == ToolEraser) {
+		a.statusText = localizeUI("반전색은 DejaVu IMG와 채우기·지우개 도구에서는 지원하지 않습니다.")
+		a.requestStatusRepaint()
+		return
+	}
 	if a.tool == ToolFill {
 		c := a.fg
 		if right {
@@ -15527,7 +14830,12 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 		if a.curveStage == 0 {
 			a.undo.Push(a.canvas)
 			a.curveUndoPending = true
+			a.curveOperation = a.chosenOperation(right)
 			a.drawButtonRight = right
+			a.curvePaintColor = a.fg
+			if right {
+				a.curvePaintColor = a.bg
+			}
 			a.curveX0, a.curveY0 = ix, iy
 			a.curveX1, a.curveY1 = ix, iy
 			a.curveBaseShiftConstrained = keyDown(VK_SHIFT)
@@ -15577,8 +14885,11 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 	if a.selection.Active {
 		a.clearSelectionState()
 	}
+	// Starting an ordinary paint stroke dismisses previous object/group selection.
+	a.clearObjectSelection()
 	a.drawing = true
 	a.drawButtonRight = right
+	a.drawOperation = a.chosenOperation(right)
 	a.startX, a.startY = ix, iy
 	a.lastX, a.lastY = ix, iy
 	a.curX, a.curY = ix, iy
@@ -15594,7 +14905,11 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 		a.shiftStrokeAnchorX, a.shiftStrokeAnchorY = 0, 0
 		a.shiftStrokePreviewX, a.shiftStrokePreviewY = 0, 0
 	}
-	a.undo.Push(a.canvas)
+	// Persisted shape objects are non-destructive. No full-canvas temporary
+	// undo snapshot is needed for their drag preview (Escape cancels directly).
+	if !(a.keepObjects && a.drawOperation != PaintTransparent && a.dejavu == nil && !a.indexedMode && (a.tool == ToolRectangle || a.tool == ToolRightTriangle || a.tool == ToolEllipse || a.tool == ToolLine || a.tool == ToolArrow)) {
+		a.undo.Push(a.canvas)
+	}
 	procSetCapture.Call(a.hwnd)
 	col := a.fg
 	if right {
@@ -15602,7 +14917,19 @@ func (a *App) onMouseDown(mx, my int, right bool) {
 	}
 	switch a.tool {
 	case ToolPencil, ToolBrush, ToolAirbrush:
-		a.canvas.StampBrush(ix, iy, a.brushSize, a.brushShape, col)
+		if a.drawOperation == PaintInvert {
+			a.invertStroke.Reset()
+			a.invertStrokeActive = true
+			if a.indexedMode {
+				palette := a.activeIndexedPaletteColors()
+				a.indexedInvertLUT = indexedInvertLookup(palette)
+				a.invertStroke.StampIndexed(a.canvas, ix, iy, a.brushSize, a.brushShape, a.indexedPixelIndices, palette, a.indexedInvertLUT)
+			} else {
+				a.invertStroke.Stamp(a.canvas, ix, iy, a.brushSize, a.brushShape)
+			}
+		} else {
+			a.canvas.StampBrush(ix, iy, a.brushSize, a.brushShape, col)
+		}
 	case ToolEraser:
 		a.canvas.StampSquare(ix, iy, a.eraserSize, a.bg)
 	case ToolLine, ToolRectangle, ToolEllipse, ToolRightTriangle, ToolArrow:
@@ -15635,6 +14962,28 @@ func (a *App) spray(ix, iy int, col uint32) {
 }
 
 func (a *App) onMouseMove(mx, my int, wparam uintptr) {
+	if a.invertStrokeActive {
+		button := uintptr(MK_LBUTTON)
+		if a.drawButtonRight {
+			button = MK_RBUTTON
+		}
+		if !a.ownsMouseCapture() || wparam&button == 0 {
+			a.cancelInverseStroke()
+		} else {
+			a.moveInverseStroke(mx, my)
+		}
+		return
+	}
+
+	if a.objectDragging {
+		if !a.ownsMouseCapture() || wparam&MK_LBUTTON == 0 {
+			a.endObjectMove(0, 0, false)
+			return
+		}
+		ix, iy := a.objectImagePoint(mx, my)
+		a.updateObjectMove(ix, iy)
+		return
+	}
 	if a.textCommitClickPending {
 		return
 	}
@@ -15758,6 +15107,7 @@ func (a *App) onMouseMove(mx, my int, wparam uintptr) {
 		_, tb, _, _ := a.layout(rc)
 		localTB := RECT{0, 0, tb.Right - tb.Left, tb.Bottom - tb.Top}
 		a.setLineSize(lineSizeFromSliderY(my-int(tb.Top), localTB))
+		a.applySelectedObjectToolOptions(false)
 		invalidate(a.hwnd)
 		return
 	}
@@ -15775,6 +15125,7 @@ func (a *App) onMouseMove(mx, my int, wparam uintptr) {
 		_, tb, _, _ := a.layout(rc)
 		localTB := RECT{0, 0, tb.Right - tb.Left, tb.Bottom - tb.Top}
 		a.setCurveSize(curveSizeFromSliderY(my-int(tb.Top), localTB))
+		a.applySelectedObjectToolOptions(false)
 		invalidate(a.hwnd)
 		return
 	}
@@ -15784,6 +15135,7 @@ func (a *App) onMouseMove(mx, my int, wparam uintptr) {
 		_, tb, _, _ := a.layout(rc)
 		localTB := RECT{0, 0, tb.Right - tb.Left, tb.Bottom - tb.Top}
 		a.setRectangleSize(rectangleSizeFromSliderY(my-int(tb.Top), localTB))
+		a.applySelectedObjectToolOptions(false)
 		invalidate(a.hwnd)
 		return
 	}
@@ -15793,6 +15145,7 @@ func (a *App) onMouseMove(mx, my int, wparam uintptr) {
 		_, tb, _, _ := a.layout(rc)
 		localTB := RECT{0, 0, tb.Right - tb.Left, tb.Bottom - tb.Top}
 		a.setEllipseSize(ellipseSizeFromSliderY(my-int(tb.Top), localTB))
+		a.applySelectedObjectToolOptions(false)
 		invalidate(a.hwnd)
 		return
 	}
@@ -15802,6 +15155,7 @@ func (a *App) onMouseMove(mx, my int, wparam uintptr) {
 		_, tb, _, _ := a.layout(rc)
 		localTB := RECT{0, 0, tb.Right - tb.Left, tb.Bottom - tb.Top}
 		a.setRightTriangleSize(rightTriangleSizeFromSliderY(my-int(tb.Top), localTB))
+		a.applySelectedObjectToolOptions(false)
 		invalidate(a.hwnd)
 		return
 	}
@@ -15811,6 +15165,7 @@ func (a *App) onMouseMove(mx, my int, wparam uintptr) {
 		_, tb, _, _ := a.layout(rc)
 		localTB := RECT{0, 0, tb.Right - tb.Left, tb.Bottom - tb.Top}
 		a.setArrowLineSize(arrowLineSizeFromSliderY(my-int(tb.Top), localTB))
+		a.applySelectedObjectToolOptions(false)
 		invalidate(a.hwnd)
 		return
 	}
@@ -15991,6 +15346,34 @@ func (a *App) onMouseMove(mx, my int, wparam uintptr) {
 }
 
 func (a *App) onMouseUp(mx, my int, right bool) {
+	if a.invertStrokeActive {
+		if right != a.drawButtonRight {
+			return
+		}
+		a.moveInverseStroke(mx, my)
+		a.invertStrokeActive = false
+		a.invertStroke.Reset()
+		a.drawing = false
+		a.preview = false
+		procReleaseCapture.Call()
+		a.markDirty()
+		a.recordHistory("반전색 붓질")
+		a.requestCanvasRepaint(true)
+		return
+	}
+
+	if a.objectDragging {
+		if !right {
+			ix, iy := a.objectImagePoint(mx, my)
+			a.endObjectMove(ix, iy, true)
+		}
+		return
+	}
+	if right && a.objectContextPending {
+		a.objectContextPending = false
+		a.showObjectContextMenu(a.objectContextX, a.objectContextY)
+		return
+	}
 	logf("MOUSEUP client=%d,%d right=%v drawing=%v tool=%d", mx, my, right, a.drawing, a.tool)
 	if a.pendingCanvasResize {
 		a.pendingCanvasResize = false
@@ -16090,6 +15473,7 @@ func (a *App) onMouseUp(mx, my int, right bool) {
 		procReleaseCapture.Call()
 		a.statusText = fmt.Sprintf("직선 굵기를 %d px로 설정했습니다.", a.lineSize)
 		logf("LINE slider commit size=%d", a.lineSize)
+		a.endSelectedObjectOptionDrag()
 		invalidate(a.hwnd)
 		return
 	}
@@ -16106,6 +15490,7 @@ func (a *App) onMouseUp(mx, my int, right bool) {
 		procReleaseCapture.Call()
 		a.statusText = fmt.Sprintf("곡선 굵기를 %d px로 설정했습니다.", a.curveSize)
 		logf("CURVE slider commit size=%d", a.curveSize)
+		a.endSelectedObjectOptionDrag()
 		invalidate(a.hwnd)
 		return
 	}
@@ -16114,6 +15499,7 @@ func (a *App) onMouseUp(mx, my int, right bool) {
 		procReleaseCapture.Call()
 		a.statusText = fmt.Sprintf("사각형 선 굵기를 %d px로 설정했습니다.", a.rectangleSize)
 		logf("RECTANGLE slider commit size=%d", a.rectangleSize)
+		a.endSelectedObjectOptionDrag()
 		invalidate(a.hwnd)
 		return
 	}
@@ -16122,6 +15508,7 @@ func (a *App) onMouseUp(mx, my int, right bool) {
 		procReleaseCapture.Call()
 		a.statusText = fmt.Sprintf("타원 선 굵기를 %d px로 설정했습니다.", a.ellipseSize)
 		logf("ELLIPSE slider commit size=%d", a.ellipseSize)
+		a.endSelectedObjectOptionDrag()
 		invalidate(a.hwnd)
 		return
 	}
@@ -16130,6 +15517,7 @@ func (a *App) onMouseUp(mx, my int, right bool) {
 		procReleaseCapture.Call()
 		a.statusText = fmt.Sprintf("직각삼각형 선 굵기를 %d px로 설정했습니다.", a.rightTriangleSize)
 		logf("RIGHT_TRIANGLE slider commit size=%d", a.rightTriangleSize)
+		a.endSelectedObjectOptionDrag()
 		invalidate(a.hwnd)
 		return
 	}
@@ -16138,6 +15526,7 @@ func (a *App) onMouseUp(mx, my int, right bool) {
 		procReleaseCapture.Call()
 		a.statusText = fmt.Sprintf("화살표 선 굵기를 %d px로 설정했습니다.", a.arrowLineSize)
 		logf("ARROW slider commit size=%d", a.arrowLineSize)
+		a.endSelectedObjectOptionDrag()
 		invalidate(a.hwnd)
 		return
 	}
@@ -16320,6 +15709,7 @@ func (a *App) onMouseUp(mx, my int, right bool) {
 			a.curveBaseShiftConstrained = false
 			a.drawing = false
 			a.curveStage = 1
+			a.recordHistoryStep("곡선 기준선", true)
 			a.statusText = a.curveInstruction()
 			logf("CURVE base end start=%d,%d end=%d,%d next-stage=1 active-controls=0", a.curveX0, a.curveY0, a.curveX1, a.curveY1)
 		} else {
@@ -16335,21 +15725,11 @@ func (a *App) onMouseUp(mx, my int, right bool) {
 			}
 			a.drawing = false
 			if stage >= a.curveBendCount {
-				col := a.fg
-				if a.drawButtonRight {
-					col = a.bg
-				}
-				a.drawRasterCurve(a.canvas, a.curveBendCount, col)
-				a.curveStage = 0
-				a.curveUndoPending = false
-				a.curveBaseShiftConstrained = false
-				a.preview = false
-				a.markDirty()
-				a.recordHistory("곡선")
-				a.statusText = a.curveInstruction()
-				logf("CURVE commit bends=%d p0=%d,%d c1=%d,%d c2=%d,%d c3=%d,%d c4=%d,%d p1=%d,%d size=%d aa=%v", a.curveBendCount, a.curveX0, a.curveY0, a.curveC1X, a.curveC1Y, a.curveC2X, a.curveC2Y, a.curveC3X, a.curveC3Y, a.curveC4X, a.curveC4Y, a.curveX1, a.curveY1, a.curveSize, a.curveAntialias)
+				a.commitCurveWithControls(a.curveBendCount, "final bend")
+
 			} else {
 				a.curveStage = stage + 1
+				a.recordHistoryStep(fmt.Sprintf("곡선 꺾기 %d", stage), true)
 				a.statusText = a.curveInstruction()
 				logf("CURVE bend%d end control=%d,%d next-stage=%d active-controls=%d", stage, ix, iy, a.curveStage, stage)
 			}
@@ -16399,21 +15779,14 @@ func (a *App) onMouseUp(mx, my int, right bool) {
 	a.shiftStrokeBasePix = nil
 	a.shiftStrokeAnchorX, a.shiftStrokeAnchorY = 0, 0
 	a.shiftStrokePreviewX, a.shiftStrokePreviewY = 0, 0
+	createdObject := false
 	if a.preview {
-		switch a.tool {
-		case ToolLine:
-			ix, iy = a.drawRasterLine(a.canvas, a.startX, a.startY, ix, iy, keyDown(VK_SHIFT), col)
-		case ToolRectangle:
-			ix, iy = a.drawRasterRectangle(a.canvas, a.startX, a.startY, ix, iy, keyDown(VK_SHIFT), col)
-		case ToolEllipse:
-			ix, iy = a.drawRasterEllipse(a.canvas, a.startX, a.startY, ix, iy, keyDown(VK_SHIFT), col)
-		case ToolRightTriangle:
-			ix, iy = a.drawRasterRightTriangle(a.canvas, a.startX, a.startY, ix, iy, keyDown(VK_SHIFT), col)
-		case ToolArrow:
-			ix, iy = a.drawRasterArrow(a.canvas, a.startX, a.startY, ix, iy, keyDown(VK_SHIFT), col)
+		ix, iy, createdObject = a.commitVectorPreview(ix, iy, col)
+		if !createdObject {
+			a.markDirty()
 		}
-		a.markDirty()
 	}
+
 	a.drawing = false
 	a.preview = false
 	procReleaseCapture.Call()
@@ -16434,7 +15807,9 @@ func (a *App) onMouseUp(mx, my int, right bool) {
 	if a.tool == ToolArrow {
 		logf("ARROW commit tail=%d,%d tip=%d,%d delta=%d,%d head=%d line=%d aa=%v shift=%v constraint=%d", a.startX, a.startY, ix, iy, ix-a.startX, iy-a.startY, a.arrowHeadSize, a.arrowLineSize, a.arrowAntialias, keyDown(VK_SHIFT), a.lineConstraintMode)
 	}
-	a.recordHistory(a.drawHistoryName(a.tool))
+	if !createdObject {
+		a.recordHistory(a.drawHistoryName(a.tool))
+	}
 	logf("DRAW end tool=%d start=%d,%d end=%d,%d", a.tool, a.startX, a.startY, ix, iy)
 	a.requestCanvasRepaint(true)
 	a.requestStatusRepaint()
@@ -16499,7 +15874,7 @@ func (a *App) toggleMenuCheck(id int, on bool) {
 		flags |= MF_CHECKED
 	}
 	target := a.viewMenu
-	if id == ID_IMAGE_OPAQUE {
+	if id == ID_IMAGE_OPAQUE || id == ID_IMAGE_RASTER_MODE {
 		target = a.imageMenu
 	}
 	procCheckMenuItem.Call(target, uintptr(id), uintptr(flags))
@@ -16592,6 +15967,11 @@ func (a *App) commitActiveTextAsTransformSelection() bool {
 	// layer over the exact pre-text canvas. The visual result remains the same,
 	// while the requested image command now has a clean selection target.
 	copy(a.canvas.Pix, baseBeforeText)
+	if i := a.objectSelected; i >= 0 && i < len(a.objects) && a.objects[i].Kind == ToolText {
+		a.objects = append(a.objects[:i], a.objects[i+1:]...)
+		a.objectsRevision++
+		a.objectSelected = -1
+	}
 	a.clearSelectionState()
 	a.selection = SelectionState{
 		Active: true, Floating: true,
@@ -16642,6 +16022,9 @@ func invertBGRASelectionPixels(pix []byte, mask []bool, w, h int) {
 }
 
 func (a *App) invertActiveSelection() bool {
+	if a.selection.Active {
+		a.flattenMovableObjectsIntoCanvas()
+	}
 	s := &a.selection
 	if !s.Active || s.W < 1 || s.H < 1 {
 		return false
@@ -16733,8 +16116,10 @@ func (a *App) legacyEditColorTarget(background bool) {
 		}
 		if background {
 			a.bg = chosenColor
+			a.bgOperation = paintMode(PaintRGB, a.bg)
 		} else {
 			a.fg = chosenColor
+			a.fgOperation = paintMode(PaintRGB, a.fg)
 		}
 		a.statusText = fmt.Sprintf("%s을 #%02X%02X%02X로 설정했습니다.", targetName, byte(chosenColor), byte(chosenColor>>8), byte(chosenColor>>16))
 	}
@@ -16759,11 +16144,24 @@ func (a *App) command(id int) {
 			}
 		} else {
 			switch id {
-			case ID_VIEW_TOOLBOX, ID_VIEW_PALETTE, ID_VIEW_STATUS, ID_VIEW_CLIPBOARD, ID_VIEW_HISTORY, ID_VIEW_GRID, ID_VIEW_THUMBNAIL, ID_VIEW_DARKMODE, ID_VIEW_LANGUAGE_KO, ID_VIEW_LANGUAGE_EN, ID_VIEW_ZOOM_NORMAL, ID_VIEW_ZOOM_LARGE, ID_INSERT_FORMULA, ID_INSERT_FUNCTION_GRAPH, ID_INSERT_IMAGE_CIRCUIT, ID_INSERT_IMAGE_ANIMAL, ID_INSERT_IMAGE_CUSTOM, ID_INSERT_IMAGE_MULTIDIM, ID_INSERT_IMAGE_FIELD, ID_HELP_TOPICS, ID_HELP_LOG, ID_HELP_ABOUT:
+			case ID_IMAGE_RASTER_MODE, ID_VIEW_TOOLBOX, ID_VIEW_PALETTE, ID_VIEW_STATUS, ID_VIEW_CLIPBOARD, ID_VIEW_HISTORY, ID_VIEW_GRID, ID_VIEW_THUMBNAIL, ID_VIEW_DARKMODE, ID_VIEW_LANGUAGE_KO, ID_VIEW_LANGUAGE_EN, ID_VIEW_ZOOM_NORMAL, ID_VIEW_ZOOM_LARGE, ID_INSERT_FORMULA, ID_INSERT_FUNCTION_GRAPH, ID_INSERT_IMAGE_CIRCUIT, ID_INSERT_IMAGE_ANIMAL, ID_INSERT_IMAGE_CUSTOM, ID_INSERT_IMAGE_MULTIDIM, ID_INSERT_IMAGE_FIELD, ID_HELP_TOPICS, ID_HELP_LOG, ID_HELP_ABOUT:
 			default:
 				a.finishTextEditing(true)
 			}
 		}
+	}
+	if id == ID_SELECT_OBJECT_TOOL {
+		a.activateObjectTool()
+		return
+	}
+	if id == objectMenuRasterize || id == objectMenuMove || id == objectMenuResize || id == objectMenuGroup || id == objectMenuUngroup ||
+		id == objectMenuForward || id == objectMenuBackward || id == objectMenuFront || id == objectMenuBack ||
+		(id >= objectMenuOpacityBase && id <= objectMenuOpacityBase+100) {
+		if !a.applyObjectMenuCommand(id) {
+			a.statusText = localizeUI("먼저 객체 선택 도구(V)로 편집할 객체를 선택하십시오.")
+			a.requestStatusRepaint()
+		}
+		return
 	}
 	if id >= ID_RECENT_BASE && id < ID_RECENT_BASE+8 {
 		idx := id - ID_RECENT_BASE
@@ -16792,9 +16190,11 @@ func (a *App) command(id int) {
 	}
 	if a.curveUndoPending {
 		switch id {
-		case ID_VIEW_TOOLBOX, ID_VIEW_PALETTE, ID_VIEW_STATUS, ID_VIEW_CLIPBOARD, ID_VIEW_HISTORY, ID_VIEW_GRID, ID_VIEW_THUMBNAIL, ID_VIEW_DARKMODE, ID_VIEW_LANGUAGE_KO, ID_VIEW_LANGUAGE_EN, ID_VIEW_ZOOM_NORMAL, ID_VIEW_ZOOM_LARGE, ID_INSERT_FORMULA, ID_INSERT_FUNCTION_GRAPH, ID_INSERT_IMAGE_CIRCUIT, ID_INSERT_IMAGE_ANIMAL, ID_INSERT_IMAGE_CUSTOM, ID_INSERT_IMAGE_MULTIDIM, ID_INSERT_IMAGE_FIELD, ID_HELP_TOPICS, ID_HELP_LOG, ID_HELP_ABOUT:
+		case ID_IMAGE_RASTER_MODE, ID_VIEW_TOOLBOX, ID_VIEW_PALETTE, ID_VIEW_STATUS, ID_VIEW_CLIPBOARD, ID_VIEW_HISTORY, ID_VIEW_GRID, ID_VIEW_THUMBNAIL, ID_VIEW_DARKMODE, ID_VIEW_LANGUAGE_KO, ID_VIEW_LANGUAGE_EN, ID_VIEW_ZOOM_NORMAL, ID_VIEW_ZOOM_LARGE, ID_INSERT_FORMULA, ID_INSERT_FUNCTION_GRAPH, ID_INSERT_IMAGE_CIRCUIT, ID_INSERT_IMAGE_ANIMAL, ID_INSERT_IMAGE_CUSTOM, ID_INSERT_IMAGE_MULTIDIM, ID_INSERT_IMAGE_FIELD, ID_HELP_TOPICS, ID_HELP_LOG, ID_HELP_ABOUT:
 			// These commands do not alter the document, so the unfinished curve
 			// may remain visible and can still be completed.
+		case ID_EDIT_UNDO, ID_EDIT_REDO:
+			// Visit each saved curve checkpoint rather than committing the curve.
 		default:
 			a.finishCurveEarlyOrCancel("command")
 		}
@@ -16833,15 +16233,25 @@ func (a *App) command(id int) {
 			a.statusText = "더 이후 히스토리가 없습니다."
 		}
 	case ID_EDIT_CUT:
-		a.deleteSelection(true)
+		if a.tool == ToolObjectSelect {
+			if a.copySelection() {
+				a.deleteSelectedObject()
+			}
+		} else {
+			a.deleteSelection(true)
+		}
 	case ID_EDIT_COPY:
 		a.copySelection()
 	case ID_EDIT_PASTE:
 		a.pasteInternalClipboard()
 	case ID_EDIT_DELETE:
-		a.deleteSelection(false)
+		if !a.deleteSelectedObject() {
+			a.deleteSelection(false)
+		}
 	case ID_EDIT_DELETE_TRANSPARENT:
-		a.deleteSelectionTransparent()
+		if !a.deleteSelectedObject() {
+			a.deleteSelectionTransparent()
+		}
 	case ID_EDIT_SELECTALL:
 		a.selectAll()
 	case ID_EDIT_PASTEFROM:
@@ -16961,6 +16371,7 @@ func (a *App) command(id int) {
 	case ID_IMAGE_INVERT:
 		if !a.invertActiveSelection() {
 			a.undo.Push(a.canvas)
+			a.flattenMovableObjectsIntoCanvas()
 			a.canvas.Invert()
 			a.markDirty()
 			a.recordHistory("색 반전")
@@ -16977,12 +16388,15 @@ func (a *App) command(id int) {
 	case ID_IMAGE_CLEAR:
 		a.clearSelectionState()
 		a.undo.Push(a.canvas)
+		a.clearMovableObjectsWithoutHistory()
 		a.canvas.Clear(a.bg)
 		a.markDirty()
 		a.recordHistory("모두 지우기")
 		invalidate(a.hwnd)
 	case ID_IMAGE_OPAQUE:
 		a.setSelectionOpaque(!a.opaque)
+	case ID_IMAGE_RASTER_MODE:
+		a.toggleRasterModeInteractive()
 	case ID_COLOR_INDEXED_TOGGLE:
 		a.toggleIndexedPaletteMode()
 	case ID_COLOR_INDEXED_256:
@@ -17034,6 +16448,9 @@ func (a *App) command(id int) {
 
 func keyDown(vk int) bool { r, _, _ := procGetKeyState.Call(uintptr(vk)); return int16(r&0xffff) < 0 }
 func (a *App) onKey(vk int) {
+	if vk == 0x71 && a.beginEditingSelectedTextObject() {
+		return
+	} // F2
 	if vk == VK_F1 {
 		a.showHelpCenter()
 		return
@@ -17112,6 +16529,8 @@ func (a *App) onKey(vk int) {
 		case VK_NEXT:
 			a.command(ID_VIEW_ZOOM_LARGE)
 		}
+	} else if vk == 'V' && !a.textTool.Active && !a.drawing {
+		a.activateObjectTool()
 	} else if vk == VK_DELETE {
 		if shift {
 			a.command(ID_EDIT_DELETE_TRANSPARENT)
@@ -17119,6 +16538,28 @@ func (a *App) onKey(vk int) {
 			a.command(ID_EDIT_DELETE)
 		}
 	} else if vk == VK_ESCAPE {
+		if a.objectArmed != 0 {
+			a.objectArmed = 0
+			a.statusText = localizeUI(objectSelectionGuidance)
+			a.requestCanvasRepaint(true)
+			a.requestStatusRepaint()
+			return
+		}
+		if a.objectDragging {
+			a.endObjectMove(0, 0, false)
+			return
+		}
+		if a.tool == ToolObjectSelect && a.objectIsolatedGroup != 0 && a.objectSelected >= 0 {
+			a.objectIsolatedGroup = 0
+			a.selectObjectWithGroup(a.objectSelected)
+			a.requestObjectSelectionUIRepaint()
+			return
+		}
+		if a.tool == ToolObjectSelect && a.objectSelected >= 0 && !a.textTool.Active && !a.drawing && !a.selection.Creating && !a.selection.Moving && !a.pendingCanvasResize && !a.resizingCanvas && !a.curveUndoPending {
+			a.clearObjectSelection()
+			a.requestObjectSelectionUIRepaint()
+			return
+		}
 		if a.tool == ToolEyedropper && a.eyedropperActive {
 			tool := a.eyedropperReturnTool
 			if tool == ToolEyedropper {
@@ -17144,7 +16585,10 @@ func (a *App) onKey(vk int) {
 		} else if a.tool == ToolCurve && a.curveUndoPending {
 			a.finishCurveEarlyOrCancel("escape")
 			invalidate(a.hwnd)
+		} else if a.invertStrokeActive {
+			a.cancelInverseStroke()
 		} else if a.drawing {
+			nonDestructiveShape := a.keepObjects && a.drawOperation != PaintTransparent && a.dejavu == nil && !a.indexedMode && (a.tool == ToolRectangle || a.tool == ToolRightTriangle || a.tool == ToolEllipse || a.tool == ToolLine || a.tool == ToolArrow)
 			a.drawing = false
 			a.preview = false
 			a.shiftStrokeActive = false
@@ -17153,7 +16597,9 @@ func (a *App) onKey(vk int) {
 			a.shiftStrokePreviewX, a.shiftStrokePreviewY = 0, 0
 			a.curveBaseShiftConstrained = false
 			procReleaseCapture.Call()
-			a.undo.Undo(a.canvas)
+			if !nonDestructiveShape {
+				a.undo.Undo(a.canvas)
+			}
 			invalidate(a.hwnd)
 		}
 	}
@@ -17341,6 +16787,7 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) (ret uintptr) {
 		}
 		return 0
 	case WM_SIZE:
+		app.clearFixedObjectPointer()
 		logf("WM_SIZE client=%dx%d", loword(lparam), hiword(lparam))
 		app.updateScrollbars()
 		var rc RECT
@@ -17416,6 +16863,14 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) (ret uintptr) {
 			return 0
 		}
 		return 0
+	case WM_TEXTSIZE_COMMIT:
+		app.commitPendingTextSize("edit focus lost")
+		return 0
+	case WM_INITMENUPOPUP:
+		if app != nil {
+			app.refreshObjectSelectMenu(wparam)
+		}
+		return 0
 	case WM_COMMAND:
 		id := int(loword(wparam))
 		code := int(hiword(wparam))
@@ -17423,15 +16878,23 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) (ret uintptr) {
 			return 0
 		}
 		app.command(id)
+		// A keyboard/menu command may change tools without a mouse movement.
+		app.refreshFixedObjectPointerFromMouse()
 		return 0
 	case WM_DROPFILES:
 		app.handleDroppedFiles(wparam)
 		return 0
 	case WM_LBUTTONDOWN:
 		app.onMouseDown(int(signedLoword(lparam)), int(signedHiword(lparam)), false)
+		if app.tool == ToolObjectSelect {
+			app.refreshFixedObjectPointerAfterClick(int(signedLoword(lparam)), int(signedHiword(lparam)))
+		}
 		return 0
 	case WM_LBUTTONDBLCLK:
 		app.onMouseDoubleClick(int(signedLoword(lparam)), int(signedHiword(lparam)))
+		if app.tool == ToolObjectSelect {
+			app.refreshFixedObjectPointerAfterClick(int(signedLoword(lparam)), int(signedHiword(lparam)))
+		}
 		return 0
 	case WM_RBUTTONDOWN:
 		app.onMouseDown(int(signedLoword(lparam)), int(signedHiword(lparam)), true)
@@ -17443,14 +16906,35 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) (ret uintptr) {
 		// well so the contrast variant follows the canvas continuously.
 		var client RECT
 		procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&client)))
-		procSetCursor.Call(app.cursorForClientPoint(mx, my, client))
+		procSetCursor.Call(app.syncFixedObjectPointer(mx, my, client, app.cursorForClientPoint(mx, my, client)))
 		return 0
+	case WM_MOUSELEAVE:
+		// The mouse can enter a child control or leave the client window
+		// without another WM_MOUSEMOVE to erase the software XOR pointer.
+		fixedObjectPointer.tracking = false
+		app.clearFixedObjectPointer()
+		return 0
+	case WM_ACTIVATEAPP:
+		if wparam == 0 {
+			app.clearFixedObjectPointer()
+		}
+		return defWindowProc(hwnd, msg, wparam, lparam)
 	case WM_CANCELMODE:
+		app.cancelInverseStroke()
+		if app.objectDragging {
+			app.endObjectMove(0, 0, false)
+		}
 		app.cancelCanvasResizeInteraction("WM_CANCELMODE", true)
 		app.cancelPendingRectSelection("WM_CANCELMODE", true)
 		return 0
 	case WM_CAPTURECHANGED:
 		newOwner := lparam
+		if app.invertStrokeActive && newOwner != app.hwnd {
+			app.cancelInverseStroke()
+		}
+		if app.objectDragging && newOwner != app.hwnd {
+			app.endObjectMove(0, 0, false)
+		}
 		if app.pendingCanvasResize || app.resizingCanvas {
 			if canvasResizeCaptureChangeIsLoss(newOwner, app.hwnd) {
 				app.cancelCanvasResizeInteraction(fmt.Sprintf("WM_CAPTURECHANGED newOwner=%#x", newOwner), false)
@@ -17470,21 +16954,32 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) (ret uintptr) {
 		return 0
 	case WM_LBUTTONUP:
 		app.onMouseUp(int(signedLoword(lparam)), int(signedHiword(lparam)), false)
+		if app.tool == ToolObjectSelect {
+			app.refreshFixedObjectPointerAfterClick(int(signedLoword(lparam)), int(signedHiword(lparam)))
+		}
 		return 0
 	case WM_RBUTTONUP:
 		app.onMouseUp(int(signedLoword(lparam)), int(signedHiword(lparam)), true)
 		return 0
 	case WM_HSCROLL:
+		app.clearFixedObjectPointer()
+		defer app.refreshFixedObjectPointerFromMouse()
 		si := SCROLLINFO{CbSize: uint32(unsafe.Sizeof(SCROLLINFO{})), FMask: SIF_ALL}
 		procGetScrollInfo.Call(hwnd, SB_HORZ, uintptr(unsafe.Pointer(&si)))
 		app.handleScroll(SB_HORZ, int(loword(wparam)), int(si.NTrackPos))
 		return 0
 	case WM_VSCROLL:
+		app.clearFixedObjectPointer()
+		defer app.refreshFixedObjectPointerFromMouse()
 		si := SCROLLINFO{CbSize: uint32(unsafe.Sizeof(SCROLLINFO{})), FMask: SIF_ALL}
 		procGetScrollInfo.Call(hwnd, SB_VERT, uintptr(unsafe.Pointer(&si)))
 		app.handleScroll(SB_VERT, int(loword(wparam)), int(si.NTrackPos))
 		return 0
 	case WM_MOUSEWHEEL:
+		// ScrollWindowEx may copy the visible surface; remove the software
+		// cursor before it moves pixels, then redraw it at the same hotspot.
+		app.clearFixedObjectPointer()
+		defer app.refreshFixedObjectPointerFromMouse()
 		delta := int(int16(hiword(wparam)))
 		pt := POINT{int32(int16(loword(lparam))), int32(int16(hiword(lparam)))}
 		procScreenToClient.Call(hwnd, uintptr(unsafe.Pointer(&pt)))
@@ -17536,6 +17031,7 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) (ret uintptr) {
 			return defWindowProc(hwnd, msg, wparam, lparam)
 		}
 		app.onKey(int(wparam))
+		app.refreshFixedObjectPointerFromMouse()
 		if wparam == VK_SHIFT {
 			if app.selection.Moving {
 				app.updateSelectionMovePosition(app.selection.MovePointerX, app.selection.MovePointerY, true)
@@ -17579,7 +17075,7 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) (ret uintptr) {
 			procScreenToClient.Call(hwnd, uintptr(unsafe.Pointer(&pt)))
 			var client RECT
 			procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&client)))
-			procSetCursor.Call(app.cursorForClientPoint(int(pt.X), int(pt.Y), client))
+			procSetCursor.Call(app.syncFixedObjectPointer(int(pt.X), int(pt.Y), client, app.cursorForClientPoint(int(pt.X), int(pt.Y), client)))
 			return 1
 		}
 		// Windows owns HTLEFT/HTRIGHT/HTTOP/HTBOTTOM/HT*CORNER and uses
@@ -17596,6 +17092,9 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) (ret uintptr) {
 		return 0
 	case WM_DESTROY:
 		logf("WM_DESTROY")
+		app.clearFixedObjectPointer()
+		destroyFixedObjectPointer()
+		app.clearObjectOutlines()
 		procDragAcceptFiles.Call(hwnd, 0)
 		app.stopScreenEyedropper()
 		app.finishTextEditing(true)
@@ -17664,9 +17163,18 @@ func main() {
 	clipboardPNGFormat, _, _ = procRegisterClipboardFormatW.Call(uintptr(unsafe.Pointer(pngName)))
 	imagePNGName := utf16Ptr("image/png")
 	clipboardImagePNGFormat, _, _ = procRegisterClipboardFormatW.Call(uintptr(unsafe.Pointer(imagePNGName)))
-	logf("CLIPBOARD registered formats PNG=%d image/png=%d", clipboardPNGFormat, clipboardImagePNGFormat)
+	ensureEditableClipboardFormats()
+	logf("CLIPBOARD registered formats PNG=%d image/png=%d dotPaint=%d SVG=%d", clipboardPNGFormat, clipboardImagePNGFormat, clipboardEditableObjectFormat, clipboardSVGFormat)
 
 	app = newApp()
+	if pref, ok, err := loadTextToolPreference(); err != nil {
+		logf("TEXT_PREF load failed: %v", err)
+	} else if ok {
+		applyTextToolPreference(&app.textTool, pref)
+		logf("TEXT_PREF loaded font=%q size=%d preview=%q b=%v i=%v u=%v mode=%d", app.textTool.FontName, app.textTool.FontSize, app.textTool.Script, app.textTool.Bold, app.textTool.Italic, app.textTool.Underline, app.textTool.ScriptMode)
+	} else {
+		logf("TEXT_PREF absent; defaults in use")
+	}
 	if savedDarkMode, ok, themeErr := loadThemePreference(); themeErr != nil {
 		logf("THEME preference load failed; using default dark=%v err=%v", app.darkMode, themeErr)
 	} else if ok {
@@ -17697,7 +17205,7 @@ func main() {
 		messageBox(0, "창 클래스를 등록하지 못했습니다.\n"+err.Error(), "dotPaint", MB_OK|MB_ICONERROR)
 		return
 	}
-	hwnd, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(utf16Ptr("제목 없음 - dotPaint"))), WS_OVERLAPPEDWINDOW|WS_HSCROLL|WS_VSCROLL, uintptr(CW_USEDEFAULT), uintptr(CW_USEDEFAULT), 1100, 760, 0, 0, hinst, 0)
+	hwnd, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(utf16Ptr("제목 없음 - dotPaint"))), WS_OVERLAPPEDWINDOW|WS_HSCROLL|WS_VSCROLL, uintptr(CW_USEDEFAULT), uintptr(CW_USEDEFAULT), 1100, 801, 0, 0, hinst, 0)
 	logf("CreateWindowExW hwnd=%#x err=%v", hwnd, err)
 	if hwnd != 0 {
 		if iconBig != 0 {
@@ -17712,6 +17220,7 @@ func main() {
 		return
 	}
 	app.hwnd = hwnd
+	app.updateObjectToolTooltip()
 	procShowWindow.Call(hwnd, SW_SHOW)
 	procUpdateWindow.Call(hwnd)
 	// File Explorer's Open With/file association launches this process with
@@ -17742,6 +17251,21 @@ func main() {
 		if r == 0 {
 			logf("GetMessageW WM_QUIT")
 			break
+		}
+		if app != nil && diagnosticLoggingEnabled && app.textTool.SizeEditHwnd != 0 && msg.Hwnd == app.textTool.SizeEditHwnd && (msg.Message == WM_KEYDOWN || msg.Message == WM_CHAR) {
+			logf("TEXT_UI size key message=%#x key=%d", msg.Message, msg.WParam)
+		}
+		if app != nil && app.textTool.SizeEditHwnd != 0 && msg.Hwnd == app.textTool.SizeEditHwnd && msg.Message == WM_KEYDOWN && (msg.WParam == 0x0D || msg.WParam == VK_TAB) {
+			reason := "Enter"
+			if msg.WParam == VK_TAB {
+				reason = "Tab"
+			}
+			app.commitPendingTextSize(reason)
+			logf("TEXT_UI size %s handled pt=%d", reason, app.textTool.FontSize)
+			if app.textTool.Active && app.textTool.Editing {
+				app.focusTextInputAtCurrentCaret()
+			}
+			continue // Keep the key away from the canvas text input.
 		}
 		if app != nil && msg.Hwnd == app.textTool.EditHwnd {
 			switch msg.Message {
@@ -17776,4 +17300,60 @@ func main() {
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
 	}
+}
+
+func (a *App) constrainedStrictTanGeometry(x0, y0, x1, y1 int) ([]PixelPoint, int, int, strictTanStep, int) {
+	return a.vectorSettings().constrainedStrictTanGeometry(x0, y0, x1, y1)
+}
+
+func (a *App) constrainedStrictTanPath(x0, y0, x1, y1 int) ([]PixelPoint, int, int) {
+	return a.vectorSettings().constrainedStrictTanPath(x0, y0, x1, y1)
+}
+
+func (a *App) constrainedLineEndpoint(x0, y0, x1, y1 int, constrain bool) (int, int) {
+	return a.vectorSettings().constrainedLineEndpoint(x0, y0, x1, y1, constrain)
+}
+
+func (a *App) drawRasterLineAt(c *Canvas, x0, y0, x1, y1 int, constrain bool, col uint32, originX, originY int) (int, int) {
+	return a.vectorSettings().drawRasterLineAt(c, x0, y0, x1, y1, constrain, col, originX, originY)
+}
+
+func (a *App) constrainedRectangleEndpoint(x0, y0, x1, y1 int, square bool) (int, int) {
+	return a.vectorSettings().constrainedRectangleEndpoint(x0, y0, x1, y1, square)
+}
+
+func (a *App) drawRasterRectangleAt(c *Canvas, x0, y0, x1, y1 int, square bool, col uint32, originX, originY int) (int, int) {
+	return a.vectorSettings().drawRasterRectangleAt(c, x0, y0, x1, y1, square, col, originX, originY)
+}
+
+func (a *App) drawRasterEllipseAt(c *Canvas, x0, y0, x1, y1 int, circle bool, col uint32, originX, originY int) (int, int) {
+	return a.vectorSettings().drawRasterEllipseAt(c, x0, y0, x1, y1, circle, col, originX, originY)
+}
+
+func (a *App) constrainedRightTriangleEndpoint(x0, y0, x1, y1 int, constrain bool) (int, int) {
+	return a.vectorSettings().constrainedRightTriangleEndpoint(x0, y0, x1, y1, constrain)
+}
+
+func (a *App) drawRasterRightTriangleAt(c *Canvas, x0, y0, x1, y1 int, constrain bool, col uint32, originX, originY int) (int, int) {
+	return a.vectorSettings().drawRasterRightTriangleAt(c, x0, y0, x1, y1, constrain, col, originX, originY)
+}
+
+func (a *App) drawRasterArrowAt(c *Canvas, x0, y0, x1, y1 int, constrain bool, col uint32, originX, originY int) (int, int) {
+	return a.vectorSettings().drawRasterArrowAt(c, x0, y0, x1, y1, constrain, col, originX, originY)
+}
+
+func (a *App) vectorSettings() *vectorRenderer {
+	return &vectorRenderer{canvas: a.canvas, lineConstraintMode: a.lineConstraintMode,
+		lineSize: a.lineSize, rectangleSize: a.rectangleSize, ellipseSize: a.ellipseSize, rightTriangleSize: a.rightTriangleSize,
+		arrowLineSize: a.arrowLineSize, arrowHeadSize: a.arrowHeadSize, lineAntialias: a.lineAntialias, arrowAntialias: a.arrowAntialias, shapeShowCenter: a.shapeShowCenter}
+}
+
+func (c *Canvas) FloodFill(x, y int, newColor uint32, tolerance int) bool {
+	started := time.Now()
+	tolerance = clampColorTolerance(tolerance)
+	logf("FILL begin x=%d y=%d new=%06X tolerance=%d canvas=%dx%d pix=%d", x, y, newColor&0xFFFFFF, tolerance, c.W, c.H, len(c.Pix))
+	replacement := colorrefToBGRA(newColor)
+	filled := toleranceFloodFillBGRA(c.Pix, c.W, c.H, x, y, replacement, tolerance)
+	logf("FILL end filled=%d tolerance=%d elapsed=%s", filled, tolerance, time.Since(started))
+	return filled > 0
 }

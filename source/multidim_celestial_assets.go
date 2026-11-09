@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"dotpaint/internal/webplossless"
 	_ "embed"
 	"encoding/hex"
 	"fmt"
@@ -26,13 +27,13 @@ import (
 // hemisphere remains. Attribution and reconstruction details are recorded in
 // docs/THIRD_PARTY_ASSETS_A205.txt.
 
-//go:embed assets/user_earth_skin_2048.png
+//go:embed assets/user_earth_skin_2048.webp
 var mdEarthTextureBytes []byte
 
 //go:embed assets/nasa_moon_lro_2048.jpg
 var mdMoonTextureBytes []byte
 
-//go:embed assets/nasa_saturn_cassini_cutout_2048.png
+//go:embed assets/nasa_saturn_cassini_cutout_2048.webp
 var mdSaturnCassiniBytes []byte
 
 //go:embed assets/nasa_saturn_cassini_global_2048.jpg
@@ -89,7 +90,13 @@ func mdDecodeTextureImage(img image.Image) mdEmbeddedTexture {
 }
 
 func mdDecodeEmbeddedTexture(data []byte) mdEmbeddedTexture {
-	img, _, err := image.Decode(bytes.NewReader(data))
+	var img image.Image
+	var err error
+	if len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WEBP")) {
+		img, err = webplossless.Decode(data)
+	} else {
+		img, _, err = image.Decode(bytes.NewReader(data))
+	}
 	if err != nil || img == nil {
 		return mdEmbeddedTexture{}
 	}

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"image/png"
+	"dotpaint/internal/webplossless"
 	"os"
 	"testing"
 )
@@ -11,25 +11,29 @@ func TestCircuitSymbolAssets(t *testing.T) {
 		path string
 		w, h int
 	}{
-		{"assets/circuit/switch.png", 76, 60},
-		{"assets/circuit/diode.png", 64, 56},
-		{"assets/circuit/resistor.png", 104, 60},
-		{"assets/circuit/variable_resistor.png", 111, 55},
-		{"assets/circuit/capacitor.png", 51, 61},
-		{"assets/circuit/ammeter.png", 78, 48},
-		{"assets/circuit/voltmeter.png", 72, 52},
-		{"assets/circuit/coil.png", 115, 66},
-		{"assets/circuit/ac_source.png", 61, 61},
-		{"assets/circuit/dc_source.png", 41, 47},
-		{"assets/circuit/npn_transistor.png", 160, 114},
-		{"assets/circuit/pnp_transistor.png", 160, 112},
+		{"assets/circuit/switch.webp", 76, 60},
+		{"assets/circuit/diode.webp", 64, 56},
+		{"assets/circuit/resistor.webp", 104, 60},
+		{"assets/circuit/variable_resistor.webp", 111, 55},
+		{"assets/circuit/capacitor.webp", 51, 61},
+		{"assets/circuit/ammeter.webp", 78, 48},
+		{"assets/circuit/voltmeter.webp", 72, 52},
+		{"assets/circuit/coil.webp", 115, 66},
+		{"assets/circuit/ac_source.webp", 61, 61},
+		{"assets/circuit/dc_source.webp", 41, 47},
+		{"assets/circuit/npn_transistor.webp", 160, 114},
+		{"assets/circuit/pnp_transistor.webp", 160, 112},
 	}
 	for _, tc := range cases {
 		f, err := os.Open(tc.path)
 		if err != nil {
 			t.Fatalf("open %s: %v", tc.path, err)
 		}
-		img, err := png.Decode(f)
+		data, err := os.ReadFile(tc.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.path, err)
+		}
+		img, err := webplossless.Decode(data)
 		_ = f.Close()
 		if err != nil {
 			t.Fatalf("decode %s: %v", tc.path, err)

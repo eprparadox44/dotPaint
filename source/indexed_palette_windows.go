@@ -99,6 +99,8 @@ func (a *App) switchIndexedPaletteMode(size int, convert bool) {
 		return
 	}
 	if convert {
+		// Indexed pixels cannot retain editable true-color object sprites.
+		a.flattenMovableObjectsIntoCanvas()
 		if a.selection.Active && a.selection.Floating {
 			a.applyFloatingSelection(a.selection.X, a.selection.Y)
 		}
@@ -135,6 +137,8 @@ func (a *App) switchIndexedPaletteMode(size int, convert bool) {
 	}
 	if size != 0 {
 		a.fg, a.bg = a.palette[0], a.palette[len(a.palette)-1]
+		a.fgOperation, a.bgOperation = PaintRGB, PaintRGB
+		a.bgOperation = PaintRGB
 		if convert {
 			a.indexedPixelIndices = quantizeIndexedBGRA(a.canvas.Pix, a.palette, a.indexedActiveCount)
 		}
@@ -232,6 +236,8 @@ func (a *App) applyIndexedColorTableWithCount(p []uint32, path string, count int
 		}
 		a.palette = append([]uint32(nil), p...)
 		a.fg, a.bg = a.palette[0], a.palette[15]
+		a.fgOperation, a.bgOperation = PaintRGB, PaintRGB
+		a.bgOperation = PaintRGB
 		invalidateDejavuTileBrowser(a)
 	} else {
 		if a.selection.Active && a.selection.Floating {
@@ -259,6 +265,8 @@ func (a *App) applyIndexedColorTableWithCount(p []uint32, path string, count int
 		}
 		a.markDirty()
 		a.fg, a.bg = a.palette[0], a.palette[count-1]
+		a.fgOperation, a.bgOperation = PaintRGB, PaintRGB
+		a.bgOperation = PaintRGB
 		a.recordHistory("인덱스 색상표 적용")
 		if len(p) == 256 {
 			a.indexedColors256 = append([]uint32(nil), p...)

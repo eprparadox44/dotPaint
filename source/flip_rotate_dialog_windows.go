@@ -283,6 +283,9 @@ func (a *App) installSelectionTransform(transformed *Canvas, anchorX, anchorY in
 	if transformed == nil || transformed.W < 1 || transformed.H < 1 || !a.selection.Active {
 		return false
 	}
+	// Transform acceptance is the first destructive operation; merely opening
+	// or canceling the dialog keeps all editable objects intact.
+	a.flattenMovableObjectsIntoCanvas()
 	base := a.selectionTransformBase()
 	a.undo.Push(a.canvas)
 	copy(a.canvas.Pix, base)
@@ -326,6 +329,8 @@ func (a *App) applyFlipRotate(source *Canvas, opts FlipRotateOptions, toSelectio
 	} else {
 		a.clearSelectionState()
 		a.undo.Push(a.canvas)
+		// Transformed source already includes the movable sprite layer.
+		a.clearMovableObjectsWithoutHistory()
 		a.canvas = transformed
 		a.markDirty()
 		a.recordHistory("대칭 이동/회전")
@@ -875,7 +880,10 @@ func (a *App) showFlipRotateDialog() {
 		source = a.selectionTransformSource()
 		targetName = fmt.Sprintf("대상: 선택 영역 %d × %d", a.selection.W, a.selection.H)
 	} else {
-		source = &Canvas{W: a.canvas.W, H: a.canvas.H, Pix: a.canvas.ClonePixels()}
+		source = a.flattenedObjectsCanvas()
+		if len(a.objects) == 0 {
+			source = &Canvas{W: a.canvas.W, H: a.canvas.H, Pix: a.canvas.ClonePixels()}
+		}
 	}
 	if source == nil {
 		return

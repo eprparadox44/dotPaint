@@ -210,7 +210,9 @@ func (a *App) enterDejavuPalette(p dejavuPalette) {
 	}
 	a.palette = dejavuPaletteColorRefs(p)
 	a.fg = a.palette[0]
+	a.fgOperation = PaintRGB
 	a.bg = a.palette[15]
+	a.bgOperation = PaintRGB
 }
 
 func (a *App) leaveDejavuIMGMode() {
@@ -264,6 +266,11 @@ func (a *App) openDejavuIMGDocument(path string) bool {
 
 	a.leaveDejavuIMGMode()
 	a.canvas = cv
+	a.objects = nil
+	a.objectsRevision = 0
+	a.objectSelected = -1
+	a.objectEditingIndex = -1
+	a.objectDragging = false
 	a.dejavu = &dejavuIMGDocument{
 		Original:         append([]byte(nil), data...),
 		OriginalIndices:  append([]byte(nil), indices...),
@@ -600,6 +607,8 @@ func (a *App) reloadDejavuPaletteInteractive() {
 	a.dejavu.PalettePath = path
 	a.palette = dejavuPaletteColorRefs(p)
 	a.fg, a.bg = a.palette[0], a.palette[15]
+	a.fgOperation, a.bgOperation = PaintRGB, PaintRGB
+	a.bgOperation = PaintRGB
 	cv, _ := dejavuCanvasFromIndices(currentIdx, p)
 	a.canvas.Pix = cv.Pix
 	// Baseline is recoloured from the original saved indices so unsaved edits

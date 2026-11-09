@@ -96,6 +96,11 @@ func Test148NativeColorPickerWiring(t *testing.T) {
 			t.Errorf("picker missing %q", x)
 		}
 	}
+	extra, err := os.ReadFile("image_export_core.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	main = append(main, extra...)
 	for _, x := range []string{"a.bgPaletteSlot = slot", "a.fgPaletteSlot = slot", "return encodeStillGIF(f, c.toRGBA())"} {
 		if !strings.Contains(string(main), x) {
 			t.Errorf("main missing %q", x)

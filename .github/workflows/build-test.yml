@@ -1,4 +1,4 @@
-name: Build and test dotPaint
+name: Build and test dotPaint 2.0.0
 
 on:
   push:
@@ -13,50 +13,37 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Install Go 1.23.2
         uses: actions/setup-go@v5
         with:
           go-version: '1.23.2'
           cache: false
-
-      - name: Go unit tests
-        working-directory: source
-        run: go test ./...
-
-      - name: Go vet
-        working-directory: source
-        run: go vet ./...
-
-      - name: Cross-compile Windows x64 / x86 / development log
-        shell: bash
+      - name: Require official version source
+        run: grep -qE '^const appVersion = "2[.]0[.]0"$' source/main_windows.go
+      - name: Run all Go tests
+        run: go -C source test ./...
+      - name: Run static analysis
+        run: go -C source vet ./...
+      - name: Build Windows x64 release and diagnostic binaries
         run: |
           set -euo pipefail
           mkdir -p dist
-          cd source
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -buildvcs=false -trimpath -ldflags='-H=windowsgui -s -w' -o ../dist/dotPaint_1.3.9_x64.exe .
-          CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -buildvcs=false -trimpath -ldflags='-H=windowsgui -s -w' -o ../dist/dotPaint_1.3.9_x86.exe .
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -buildvcs=false -tags devlog -trimpath -ldflags='-H=windowsgui' -o ../dist/dotPaint_1.3.9_DEVELOPMENT_LOG_x64.exe .
-
-      - name: Check normal EXE size (10 MiB max, dev-log unrestricted)
-        shell: bash
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go -C source build -buildvcs=false -trimpath -ldflags='-H=windowsgui -s -w -buildid=' -o ../dist/dotPaint_2.0.0_x64.exe .
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go -C source build -buildvcs=false -tags devlog -trimpath -ldflags='-H=windowsgui -buildid=' -o ../dist/dotPaint_2.0.0_DEVLOG_x64.exe .
+      - name: Verify release size and hashes
         run: |
           set -euo pipefail
-          for f in dist/dotPaint_1.3.9_x64.exe dist/dotPaint_1.3.9_x86.exe; do
-            bytes=$(stat -c%s "$f")
-            echo "$f: $bytes bytes"
-            test "$bytes" -le 10485760 || { echo "ERROR: Normal EXE is over 10 MiB"; exit 1; }
-          done
-          stat -c 'Development log EXE: %s bytes (no size limit)' dist/dotPaint_1.3.9_DEVELOPMENT_LOG_x64.exe
-
-      - name: Store compiled EXEs as workflow artifacts
-        uses: actions/upload-artifact@v4
+          bytes=$(stat -c%s dist/dotPaint_2.0.0_x64.exe)
+          echo "Release size: $bytes bytes"
+          test "$bytes" -le 10485760
+          echo 'Diagnostic build has no size cap.'
+          sha256sum dist/*.exe
+      - uses: actions/upload-artifact@v4
         with:
-          name: dotPaint-v1.3.9-Windows-CI
+          name: dotPaint-v2.0.0-Windows-CI
           path: dist/*.exe
           if-no-files-found: error
           retention-days: 14

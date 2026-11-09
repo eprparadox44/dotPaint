@@ -7,16 +7,16 @@ import (
 )
 
 func Test1251TriangleThickTanUsesStrictTanShaftSource(t *testing.T) {
-	data, err := os.ReadFile("main_windows.go")
+	data, err := os.ReadFile("vector_renderer_core.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(data)
-	start := strings.Index(s, "func (a *App) drawRasterRightTriangleAt(")
+	start := strings.Index(s, "func (a *vectorRenderer) drawRasterRightTriangleAt(")
 	if start < 0 {
 		t.Fatal("triangle raster function missing")
 	}
-	end := strings.Index(s[start:], "func (a *App) drawRasterRightTriangle(")
+	end := strings.Index(s[start:], "func (a *vectorRenderer) drawRasterArrowAt(")
 	if end < 0 {
 		t.Fatal("triangle raster function end missing")
 	}
@@ -34,10 +34,14 @@ func Test1251TriangleThickTanUsesStrictTanShaftSource(t *testing.T) {
 	if strings.Contains(body, "DrawStyledPixelPath(") {
 		t.Fatal("legacy feather-producing tan pixel path still in triangle")
 	}
-	preview := strings.Index(s, "func (a *App) paintRasterRightTrianglePreview(")
-	if preview < 0 || !strings.Contains(s[preview:], "a.drawRasterRightTriangleAt(preview,") {
+	previewData, err := os.ReadFile("main_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(previewData), "a.drawRasterRightTriangleAt(target,") {
 		t.Fatal("preview no longer shares triangle renderer")
 	}
+
 }
 
 // The portable strict-tan cap is the one now shared between line and triangle.

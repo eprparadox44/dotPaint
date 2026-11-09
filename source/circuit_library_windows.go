@@ -3,10 +3,9 @@
 package main
 
 import (
-	"bytes"
+	"dotpaint/internal/webplossless"
 	_ "embed"
 	"fmt"
-	"image/png"
 	"math"
 	"syscall"
 	"unsafe"
@@ -19,44 +18,44 @@ const (
 	circuitVKReturn         = 0x0D
 )
 
-// The user supplied these twelve images. They are embedded byte-for-byte and are
+// The user supplied these twelve images. They are embedded as lossless WebP and are
 // never redrawn or recoloured by dotPaint, aside from transparent preview compositing in the chooser.
 //
-//go:embed assets/circuit/switch.png
-var circuitSwitchPNG []byte
+//go:embed assets/circuit/switch.webp
+var circuitSwitchWebP []byte
 
-//go:embed assets/circuit/diode.png
-var circuitDiodePNG []byte
+//go:embed assets/circuit/diode.webp
+var circuitDiodeWebP []byte
 
-//go:embed assets/circuit/resistor.png
-var circuitResistorPNG []byte
+//go:embed assets/circuit/resistor.webp
+var circuitResistorWebP []byte
 
-//go:embed assets/circuit/variable_resistor.png
-var circuitVariableResistorPNG []byte
+//go:embed assets/circuit/variable_resistor.webp
+var circuitVariableResistorWebP []byte
 
-//go:embed assets/circuit/capacitor.png
-var circuitCapacitorPNG []byte
+//go:embed assets/circuit/capacitor.webp
+var circuitCapacitorWebP []byte
 
-//go:embed assets/circuit/ammeter.png
-var circuitAmmeterPNG []byte
+//go:embed assets/circuit/ammeter.webp
+var circuitAmmeterWebP []byte
 
-//go:embed assets/circuit/voltmeter.png
-var circuitVoltmeterPNG []byte
+//go:embed assets/circuit/voltmeter.webp
+var circuitVoltmeterWebP []byte
 
-//go:embed assets/circuit/coil.png
-var circuitCoilPNG []byte
+//go:embed assets/circuit/coil.webp
+var circuitCoilWebP []byte
 
-//go:embed assets/circuit/ac_source.png
-var circuitACSourcePNG []byte
+//go:embed assets/circuit/ac_source.webp
+var circuitACSourceWebP []byte
 
-//go:embed assets/circuit/dc_source.png
-var circuitDCSourcePNG []byte
+//go:embed assets/circuit/dc_source.webp
+var circuitDCSourceWebP []byte
 
-//go:embed assets/circuit/npn_transistor.png
-var circuitNPNTransistorPNG []byte
+//go:embed assets/circuit/npn_transistor.webp
+var circuitNPNTransistorWebP []byte
 
-//go:embed assets/circuit/pnp_transistor.png
-var circuitPNPTransistorPNG []byte
+//go:embed assets/circuit/pnp_transistor.webp
+var circuitPNPTransistorWebP []byte
 
 type circuitSymbolSpec struct {
 	Name string
@@ -86,23 +85,23 @@ var (
 
 func circuitSymbolSpecs() []circuitSymbolSpec {
 	return []circuitSymbolSpec{
-		{Name: "스위치", Data: circuitSwitchPNG},
-		{Name: "다이오드", Data: circuitDiodePNG},
-		{Name: "저항", Data: circuitResistorPNG},
-		{Name: "가변저항", Data: circuitVariableResistorPNG},
-		{Name: "축전기", Data: circuitCapacitorPNG},
-		{Name: "전류계", Data: circuitAmmeterPNG},
-		{Name: "전압계", Data: circuitVoltmeterPNG},
-		{Name: "코일", Data: circuitCoilPNG},
-		{Name: "교류전원", Data: circuitACSourcePNG},
-		{Name: "직류전원", Data: circuitDCSourcePNG},
-		{Name: "NPN 트랜지스터", Data: circuitNPNTransistorPNG},
-		{Name: "PNP 트랜지스터", Data: circuitPNPTransistorPNG},
+		{Name: "스위치", Data: circuitSwitchWebP},
+		{Name: "다이오드", Data: circuitDiodeWebP},
+		{Name: "저항", Data: circuitResistorWebP},
+		{Name: "가변저항", Data: circuitVariableResistorWebP},
+		{Name: "축전기", Data: circuitCapacitorWebP},
+		{Name: "전류계", Data: circuitAmmeterWebP},
+		{Name: "전압계", Data: circuitVoltmeterWebP},
+		{Name: "코일", Data: circuitCoilWebP},
+		{Name: "교류전원", Data: circuitACSourceWebP},
+		{Name: "직류전원", Data: circuitDCSourceWebP},
+		{Name: "NPN 트랜지스터", Data: circuitNPNTransistorWebP},
+		{Name: "PNP 트랜지스터", Data: circuitPNPTransistorWebP},
 	}
 }
 
-func circuitDecodePNG(data []byte) (ClipboardImage, error) {
-	decoded, err := png.Decode(bytes.NewReader(data))
+func circuitDecodeWebP(data []byte) (ClipboardImage, error) {
+	decoded, err := webplossless.Decode(data)
 	if err != nil {
 		return ClipboardImage{}, err
 	}
@@ -146,9 +145,9 @@ func loadCircuitSymbols() ([]circuitSymbol, error) {
 	specs := circuitSymbolSpecs()
 	out := make([]circuitSymbol, 0, len(specs))
 	for _, spec := range specs {
-		img, err := circuitDecodePNG(spec.Data)
+		img, err := circuitDecodeWebP(spec.Data)
 		if err != nil {
-			return nil, fmt.Errorf("%s PNG 해석 실패: %w", spec.Name, err)
+			return nil, fmt.Errorf("%s WebP 해석 실패: %w", spec.Name, err)
 		}
 		out = append(out, circuitSymbol{Name: spec.Name, Image: img, Preview: circuitOpaqueWhitePreview(img)})
 	}

@@ -1160,12 +1160,18 @@ func (a *App) editColorTarget(background bool) {
 	if s.mode == 0 && s.editTarget == 1 && s.mainSelected >= 0 && s.mainSelected < 44 {
 		slot = s.mainSelected
 	}
+	previousFG, previousOp := a.fg, a.chosenOperation(false)
 	if background {
 		a.bg = chosen
+		a.bgOperation = PaintRGB
 		a.bgPaletteSlot = slot
 	} else {
 		a.fg = chosen
+		a.fgOperation = PaintRGB
 		a.fgPaletteSlot = slot
+	}
+	if !background && a.textTool.Active {
+		a.applyTextColorToSelection(previousFG, previousOp, chosen, PaintRGB)
 	}
 	a.statusText = fmt.Sprintf("색 편집 완료: #%02X%02X%02X · 인덱스 %d색", byte(chosen), byte(chosen>>8), byte(chosen>>16), s.mode)
 	logf("COLOR_PICKER accepted color=%#06x indexed=%d changed=%v selected=%d main-slot=%d main-changed=%v", chosen, s.mode, s.changed, s.selected, s.mainSelected, s.mainChanged)

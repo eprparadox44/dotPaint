@@ -3,10 +3,9 @@
 package main
 
 import (
-	"bytes"
+	"dotpaint/internal/webplossless"
 	_ "embed"
 	"fmt"
-	"image/png"
 	"math"
 	"syscall"
 	"unsafe"
@@ -19,17 +18,17 @@ const (
 	animalVKReturn         = 0x0D
 )
 
-// The user supplied these three animal PNGs. They are embedded byte-for-byte
+// The user supplied these three animal images. They are embedded as lossless WebP
 // and shown in sorted order inside the chooser.
 
-//go:embed assets/animal/adelie_penguin_1.png
-var animalAdeliePenguin1PNG []byte
+//go:embed assets/animal/adelie_penguin_1.webp
+var animalAdeliePenguin1WebP []byte
 
-//go:embed assets/animal/adelie_penguin_2.png
-var animalAdeliePenguin2PNG []byte
+//go:embed assets/animal/adelie_penguin_2.webp
+var animalAdeliePenguin2WebP []byte
 
-//go:embed assets/animal/mouse.png
-var animalMousePNG []byte
+//go:embed assets/animal/mouse.webp
+var animalMouseWebP []byte
 
 type animalSymbolSpec struct {
 	Name string
@@ -59,14 +58,14 @@ var (
 
 func animalSymbolSpecs() []animalSymbolSpec {
 	return []animalSymbolSpec{
-		{Name: "아델리 펭귄1", Data: animalAdeliePenguin1PNG},
-		{Name: "아델리 펭귄2", Data: animalAdeliePenguin2PNG},
-		{Name: "쥐", Data: animalMousePNG},
+		{Name: "아델리 펭귄1", Data: animalAdeliePenguin1WebP},
+		{Name: "아델리 펭귄2", Data: animalAdeliePenguin2WebP},
+		{Name: "쥐", Data: animalMouseWebP},
 	}
 }
 
-func animalDecodePNG(data []byte) (ClipboardImage, error) {
-	decoded, err := png.Decode(bytes.NewReader(data))
+func animalDecodeWebP(data []byte) (ClipboardImage, error) {
+	decoded, err := webplossless.Decode(data)
 	if err != nil {
 		return ClipboardImage{}, err
 	}
@@ -110,9 +109,9 @@ func loadAnimalSymbols() ([]animalSymbol, error) {
 	specs := animalSymbolSpecs()
 	out := make([]animalSymbol, 0, len(specs))
 	for _, spec := range specs {
-		img, err := animalDecodePNG(spec.Data)
+		img, err := animalDecodeWebP(spec.Data)
 		if err != nil {
-			return nil, fmt.Errorf("%s PNG 해석 실패: %w", spec.Name, err)
+			return nil, fmt.Errorf("%s WebP 해석 실패: %w", spec.Name, err)
 		}
 		out = append(out, animalSymbol{Name: spec.Name, Image: img, Preview: animalOpaqueWhitePreview(img)})
 	}

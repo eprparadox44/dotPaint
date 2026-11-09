@@ -15,7 +15,7 @@ func TestA224HiddenSentinelCannotOwnToolbarStyle(t *testing.T) {
 	checks := []string{
 		`const appVersion = "A237-DARK-LIBRARIES-HELP-ABOUT-BACKGROUND"`,
 		`sentinelStyle := textLayoutSentinelStyle(richStyles, base, a.activeTextInsertionStyle(), a.textTool.InsertionStyleActive)`,
-		`setRichCharFormat(a.textTool.LayoutHwnd, richUnits, richUnits+1, sentinelStyle, a.fg, dpi)`,
+		`setRichCharFormat(a.textTool.LayoutHwnd, richUnits, richUnits+1, sentinelStyle, textStyleDisplayColor(sentinelStyle, a.fg), dpi)`,
 		`sendMessage(a.textTool.LayoutHwnd, EM_SETCHARFORMAT, SCF_SELECTION`,
 		`TEXT layout final-style`,
 	}

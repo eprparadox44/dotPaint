@@ -31,7 +31,7 @@ func TestA234GraphInvertTextToolboxAndAbout(t *testing.T) {
 	for _, token := range []string{
 		`const appVersion = "A237-DARK-LIBRARIES-HELP-ABOUT-BACKGROUND"`,
 		`BS_OWNERDRAW`,
-		`themeWindowHandles(a.darkMode, a.textTool.FontCombo`,
+		`themeWindowHandles(a.darkMode, a.textToolbarControlHandles()...)`,
 		`if drawThemedOwnerDrawPushButton(dis)`,
 		`a.showAboutWindow()`,
 	} {

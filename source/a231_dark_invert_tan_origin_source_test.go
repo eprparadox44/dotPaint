@@ -75,7 +75,7 @@ func TestA232DarkToolIconsUseHollowBrush(t *testing.T) {
 }
 
 func TestA232StrictTanOnePixelRestoresOrigin(t *testing.T) {
-	src := readA231Source(t, "main_windows.go")
+	src := readA231Source(t, "canvas_raster_core.go")
 	start := strings.Index(src, `func (c *Canvas) DrawArrowShaftStrictTanPixelPath`)
 	if start < 0 {
 		t.Fatal("strict tan renderer not found")

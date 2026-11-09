@@ -61,7 +61,11 @@ func TestVectorPreviewKeepsGlobalConstraintBeforeTranslation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Windows 미리보기 소스를 읽지 못했습니다: %v", err)
 	}
-	source := string(data)
+	extra, err := os.ReadFile(filepath.Join(filepath.Dir(here), "vector_renderer_core.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(data) + string(extra)
 	if !strings.Contains(source, "constraints in full-canvas coordinates") {
 		t.Fatal("전체 캔버스 좌표에서 제약을 먼저 계산한다는 보존 표식이 없습니다")
 	}

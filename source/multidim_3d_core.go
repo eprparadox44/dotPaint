@@ -619,12 +619,17 @@ func mdBuildTorusMesh(majorRadius, minorRadius float64, majorSteps, minorSteps i
 			verts = append(verts, mdVec3{x: rho * cu, y: rho * su, z: minorRadius * sv})
 		}
 	}
+	// Keep the existing quad ordering and winding, but store all face indices
+	// in one backing array instead of allocating a separate 4-int slice for
+	// every cell. Live rotation rebuilds this mesh repeatedly.
 	faces = make([]mdFace, 0, majorSteps*minorSteps)
+	faceIndexBuffer := make([]int, 4*majorSteps*minorSteps)
 	for i := 0; i < majorSteps; i++ {
 		for j := 0; j < minorSteps; j++ {
-			faces = append(faces, mdFace{indices: []int{
-				idx(i, j), idx(i+1, j), idx(i+1, j+1), idx(i, j+1),
-			}})
+			off := 4 * (i*minorSteps + j)
+			q := faceIndexBuffer[off : off+4 : off+4]
+			q[0], q[1], q[2], q[3] = idx(i, j), idx(i+1, j), idx(i+1, j+1), idx(i, j+1)
+			faces = append(faces, mdFace{indices: q})
 		}
 	}
 	return verts, faces
@@ -672,7 +677,10 @@ func mdBuildMobiusMesh(radius, halfWidth float64, aroundSteps, acrossSteps int) 
 			verts = append(verts, mdMobiusPoint(radius, u, v))
 		}
 	}
+	// One contiguous index buffer removes thousands of short-lived slices
+	// without changing the non-orientable seam or face ordering.
 	faces = make([]mdFace, 0, aroundSteps*acrossSteps)
+	faceIndexBuffer := make([]int, 4*aroundSteps*acrossSteps)
 	for i := 0; i < aroundSteps; i++ {
 		next := i + 1
 		wrapped := false
@@ -686,9 +694,10 @@ func mdBuildMobiusMesh(radius, halfWidth float64, aroundSteps, acrossSteps int) 
 				j0 = acrossSteps - j
 				j1 = acrossSteps - (j + 1)
 			}
-			faces = append(faces, mdFace{indices: []int{
-				idx(i, j), idx(next, j0), idx(next, j1), idx(i, j+1),
-			}})
+			off := 4 * (i*acrossSteps + j)
+			q := faceIndexBuffer[off : off+4 : off+4]
+			q[0], q[1], q[2], q[3] = idx(i, j), idx(next, j0), idx(next, j1), idx(i, j+1)
+			faces = append(faces, mdFace{indices: q})
 		}
 	}
 	return verts, faces

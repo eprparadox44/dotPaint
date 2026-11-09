@@ -4964,6 +4964,7 @@ func fieldRenderPotentialVolume(r *fieldRaster, scene fieldScene, projector fiel
 	scale := math.Min(1, math.Min(float64(maxW)/float64(r.W), float64(maxH)/float64(r.H)))
 	vw, vh := max(1, int(math.Ceil(float64(r.W)*scale))), max(1, int(math.Ceil(float64(r.H)*scale)))
 	vol := fieldNewRaster(vw, vh)
+	preparedBands := fieldPreparePotentialBands(bands)
 	vp := projector
 	vp.W, vp.H = vw, vh
 	raySteps := 28
@@ -5009,7 +5010,7 @@ func fieldRenderPotentialVolume(r *fieldRaster, scene fieldScene, projector fiel
 						if !ok {
 							continue
 						}
-						percent, sign, ok := fieldPotentialPercentForValue(bands, value)
+						percent, sign, ok := fieldPotentialPercentForValuePrepared(preparedBands, value)
 						if !ok || percent < .40 || grid.conductorAt(point) {
 							continue
 						}

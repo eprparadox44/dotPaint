@@ -1,3 +1,9 @@
+dotPaint 1.5.0-beta2 현재 소스 안내
+
+현재 빌드는 상위 폴더의 build_1.5.0-beta2.bat / .sh를 사용한다냥.
+새 기능·검증·제약은 상위 폴더의 DOTPAINT_beta2_*_KO.md에 정리했다냥.
+아래의 이전 버전 안내와 BUILD_1.2.*.bat는 과거 개발 기록이다냥.
+
 현재 최종 빌드: dotPaint 1.2.47 (2026-10-11)
 Windows 재빌드: BUILD_1.2.47.bat
 자세한 내용: ../README_1.2.47_KO.txt

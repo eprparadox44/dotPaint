@@ -506,6 +506,7 @@ func (a *App) applyStretchSkew(source *Canvas, opts StretchSkewOptions, toSelect
 	} else {
 		a.clearSelectionState()
 		a.undo.Push(a.canvas)
+		a.clearMovableObjectsWithoutHistory()
 		a.canvas = transformed
 		a.markDirty()
 		a.recordHistory("늘이기/기울이기")
@@ -529,7 +530,10 @@ func (a *App) showStretchSkewDialog() {
 		source = a.selectionTransformSource()
 		targetName = fmt.Sprintf("대상: 선택 영역 %d × %d", a.selection.W, a.selection.H)
 	} else {
-		source = &Canvas{W: a.canvas.W, H: a.canvas.H, Pix: a.canvas.ClonePixels()}
+		source = a.flattenedObjectsCanvas()
+		if len(a.objects) == 0 {
+			source = &Canvas{W: a.canvas.W, H: a.canvas.H, Pix: a.canvas.ClonePixels()}
+		}
 	}
 	if source == nil {
 		return

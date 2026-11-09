@@ -20,9 +20,9 @@ func startupDocumentPath(args []string) (string, error) {
 		return "", fmt.Errorf("파일 경로가 비어 있습니다")
 	}
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".png", ".bmp", ".jpg", ".jpeg", ".gif", ".img":
+	case ".dop", ".png", ".bmp", ".jpg", ".jpeg", ".gif", ".img":
 		return path, nil
 	default:
-		return "", fmt.Errorf("지원하지 않는 그림 파일입니다: %s (PNG, BMP, JPG, JPEG, GIF, DejaVu IMG 지원)", filepath.Ext(path))
+		return "", fmt.Errorf("지원하지 않는 그림 파일입니다: %s (DOP, PNG, BMP, JPG, JPEG, GIF, DejaVu IMG 지원)", filepath.Ext(path))
 	}
 }

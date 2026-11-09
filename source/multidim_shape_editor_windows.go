@@ -3265,7 +3265,8 @@ func mdBuild4DFaceAccel(verts []mdVec3, faces []mdFace4, grid int) *md4FaceAccel
 	padZ := (maxZ - minZ) * 1e-6
 	minX, maxX = minX-padX, maxX+padX
 	minZ, maxZ = minZ-padZ, maxZ+padZ
-	a := &md4FaceAccel{minX: minX, maxX: maxX, minZ: minZ, maxZ: maxZ, cols: grid, rows: grid, bins: make([][]int, grid*grid)}
+	a := &md4FaceAccel{minX: minX, maxX: maxX, minZ: minZ, maxZ: maxZ, cols: grid, rows: grid}
+	bounds := make([]mdFaceBinRange, len(faces))
 	toX := func(x float64) int {
 		return md4ClampInt(int((x-minX)/(maxX-minX)*float64(grid)), 0, grid-1)
 	}
@@ -3301,13 +3302,9 @@ func mdBuild4DFaceAccel(verts []mdVec3, faces []mdFace4, grid int) *md4FaceAccel
 		}
 		x0, x1 := toX(fminX), toX(fmaxX)
 		z0, z1 := toZ(fminZ), toZ(fmaxZ)
-		for z := z0; z <= z1; z++ {
-			for x := x0; x <= x1; x++ {
-				idx := z*grid + x
-				a.bins[idx] = append(a.bins[idx], fi)
-			}
-		}
+		bounds[fi] = mdFaceBinRange{x0: x0, x1: x1, z0: z0, z1: z1, valid: true}
 	}
+	a.bins = mdPackProjectedFaceBins(bounds, grid)
 	return a
 }
 

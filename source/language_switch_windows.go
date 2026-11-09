@@ -17,6 +17,12 @@ func (a *App) switchDotPaintLanguage(edition string) {
 	}
 	previous := dotPaintEdition
 	dotPaintEdition = edition
+	a.updateObjectToolTooltip()
+	if a.objectEditingIndex >= 0 && a.textTool.Active {
+		a.statusText = localizeUI("텍스트 객체 다시 편집: 수정 후 바깥을 클릭하면 객체가 갱신됩니다. Esc는 변경 취소.")
+	} else if a.tool == ToolObjectSelect || a.objectSelected >= 0 && a.objectSelected < len(a.objects) {
+		a.refreshObjectGuidance()
+	}
 
 	// Rebuild only the menu. This path is also used for the live theme switch;
 	// it does not reinitialize App, alter any document state, or close editors.
@@ -59,6 +65,17 @@ func (a *App) switchDotPaintLanguage(edition string) {
 		}
 		refreshLocalizedChildControls(root, previous, edition)
 		procInvalidateRect.Call(root, 0, 1)
+	}
+	if s := activeHelpWindow; s != nil && s.hwnd != 0 {
+		selected := s.selected
+		s.topics = dotPaintHelpTopics()
+		if s.topicList != 0 {
+			sendMessage(s.topicList, 0x0184, 0, 0) // LB_RESETCONTENT
+			for _, topic := range s.topics {
+				sendMessage(s.topicList, LB_ADDSTRING, 0, uintptr(unsafe.Pointer(utf16Ptr(topic.Title))))
+			}
+		}
+		helpSetSelectedTopic(s, selected)
 	}
 	if err := saveUILanguagePreference(edition); err != nil {
 		logf("LIVE_LANGUAGE preference save failed: %v", err)

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"image/png"
+	"dotpaint/internal/webplossless"
 	"os"
 	"testing"
 )
@@ -11,16 +11,20 @@ func TestAnimalSymbolAssets(t *testing.T) {
 		path string
 		w, h int
 	}{
-		{"assets/animal/adelie_penguin_1.png", 287, 395},
-		{"assets/animal/adelie_penguin_2.png", 475, 313},
-		{"assets/animal/mouse.png", 389, 225},
+		{"assets/animal/adelie_penguin_1.webp", 287, 395},
+		{"assets/animal/adelie_penguin_2.webp", 475, 313},
+		{"assets/animal/mouse.webp", 389, 225},
 	}
 	for _, tc := range cases {
 		f, err := os.Open(tc.path)
 		if err != nil {
 			t.Fatalf("open %s: %v", tc.path, err)
 		}
-		img, err := png.Decode(f)
+		data, err := os.ReadFile(tc.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.path, err)
+		}
+		img, err := webplossless.Decode(data)
 		_ = f.Close()
 		if err != nil {
 			t.Fatalf("decode %s: %v", tc.path, err)

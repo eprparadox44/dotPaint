@@ -33,7 +33,7 @@ func TestAdaptiveCursorWindowsMarkersA218(t *testing.T) {
 	for _, marker := range []string{
 		"A237-DARK-LIBRARIES-HELP-ABOUT-BACKGROUND",
 		"Mouse capture can suppress WM_SETCURSOR",
-		"procSetCursor.Call(app.cursorForClientPoint(mx, my, client))",
+		"procSetCursor.Call(app.syncFixedObjectPointer(mx, my, client, app.cursorForClientPoint(mx, my, client)))",
 	} {
 		if !strings.Contains(mainSrc, marker) {
 			t.Fatalf("missing mouse-move cursor refresh marker %q", marker)
