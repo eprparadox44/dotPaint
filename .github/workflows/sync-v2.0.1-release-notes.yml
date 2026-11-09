@@ -31,5 +31,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release view v2.0.1 --repo "$GITHUB_REPOSITORY" --json body --jq .body > /tmp/github-v2.0.1-release-notes.md
-          diff -u RELEASE_NOTES_2.0.1.md /tmp/github-v2.0.1-release-notes.md
+          gh release view v2.0.1 --repo "$GITHUB_REPOSITORY" --json body > /tmp/github-v2.0.1-release.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          release = json.loads(Path("/tmp/github-v2.0.1-release.json").read_text(encoding="utf-8"))
+          source = Path("RELEASE_NOTES_2.0.1.md").read_text(encoding="utf-8")
+          assert release["body"] == source, "Release notes do not match source file"
+          print("GitHub release notes exactly match repository source.")
+          PY
