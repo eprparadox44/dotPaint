@@ -491,7 +491,7 @@ GPU 기능은 로그의 backend=D3D11 및 fallback=false를 확인하십시오. 
 		versionNumber = 21
 	}
 	topics = append(topics, helpTopic{
-		Title: fmt.Sprintf(localizeUI("%d. 버전 정보와 2.0.0"), versionNumber),
+		Title: fmt.Sprintf(localizeUI("%d. 버전 정보와 %s"), versionNumber, appVersion),
 		Body: fmt.Sprintf(localizeUI(`현재 실행 버전: %s
 
 dotPaint 2.0은 객체 편집·DOP 저장 및 80단계 히스토리를 지원합니다. Windows GUI 실기 검증 항목은 별도 보고서를 참고하십시오.

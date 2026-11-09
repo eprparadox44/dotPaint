@@ -33,7 +33,7 @@ func TestA233HelpCenterSourceMarkers(t *testing.T) {
 		`helpWindowClassName = "dotPaintHelpCenterA233"`,
 		`func dotPaintHelpTopics() []helpTopic`,
 		`Title: "1. 시작하기와 화면 구성"`,
-		`Title: fmt.Sprintf(localizeUI("%d. 버전 정보와 2.0.0"), versionNumber)`,
+		`Title: fmt.Sprintf(localizeUI("%d. 버전 정보와 %s"), versionNumber, appVersion)`,
 		`func (a *App) showHelpCenter()`,
 		`handleDarkEditorNonClient`,
 		`drawThemedOwnerDrawPushButton`,

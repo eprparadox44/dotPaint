@@ -11,14 +11,14 @@ import (
 // version contract rather than accidentally display an obsolete major label.
 func TestRelease14VersionAndAboutHelpLabels(t *testing.T) {
 	expected := map[string][]string{
-		"main_windows.go": {`const appVersion = "2.0.0"`},
+		"main_windows.go": {`const appVersion = "2.0.1"`},
 		"about_window_windows.go": {
 			`fmt.Sprintf("dotPaint %s", appVersion)`,
 			`fmt.Sprintf("dotPaint %s 정보", appVersion)`,
-			`fmt.Sprintf("현재 빌드: %s", appVersion)`,
+			`fmt.Sprintf(localizeUI("현재 빌드: %s"), appVersion)`,
 		},
 		"help_window_windows.go": {
-			`버전 정보와 2.0`,
+			`%d. 버전 정보와 %s`,
 			`dotPaint 2.0은`,
 			`Windows x64`,
 		},

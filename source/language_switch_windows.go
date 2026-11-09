@@ -66,6 +66,11 @@ func (a *App) switchDotPaintLanguage(edition string) {
 		refreshLocalizedChildControls(root, previous, edition)
 		procInvalidateRect.Call(root, 0, 1)
 	}
+	// The About title contains the version number, so generic exact-string
+	// translation cannot refresh it. Redraw the custom-painted body too.
+	if s := activeAboutWindow; s != nil && s.hwnd != 0 {
+		aboutRefreshLanguage(s)
+	}
 	if s := activeHelpWindow; s != nil && s.hwnd != 0 {
 		selected := s.selected
 		s.topics = dotPaintHelpTopics()

@@ -17,7 +17,15 @@ import (
 var dotPaintEdition = "ko"
 
 var uiTranslations = map[string]string{
-	"래스터화 모드": "Rasterization Mode",
+	// About dialog: license details, buttons and hyperlink failure messages.
+	"Copyright © 2026 지너드 · G.nerd (eprparadox44)": "Copyright © 2026 G.nerd (eprparadox44)",
+	"라이선스: MIT License (프로젝트 자체 코드)":               "License: MIT License (original project code)",
+	"제3자 코드·이미지에는 별도 사용 조건이 적용될 수 있습니다.":           "Third-party code and images may have separate license terms.",
+	"MIT 라이선스 전문":     "Full MIT License",
+	"제3자 자료 고지":       "Third-Party Notices",
+	"dotPaint 라이선스":   "dotPaint License",
+	"문서를 열 수 없습니다.\n": "Could not open the document.\n",
+	"래스터화 모드":         "Rasterization Mode",
 	" DOP 객체 보존을 위해 래스터화 모드를 자동 해제했습니다.": " Rasterization Mode was turned off to preserve DOP objects.",
 	"래스터 그림":      "Raster Drawing",
 	"래스터화 모드(&M)": "Rasterization Mode(&M)",
@@ -73,7 +81,7 @@ var uiTranslations = map[string]string{
 	"객체 유지 끔: 새 도형·텍스트는 픽셀로 확정됩니다.":                    "Keep Object disabled: new shapes and text are committed to pixels.",
 	"선택 객체를 래스터화했습니다. 편집 핸들은 제거되며 Ctrl+Z로 되돌릴 수 있습니다.": "Selected object rasterized. Editing handles removed; Ctrl+Z restores editability.",
 	"먼저 객체 선택 도구(V)로 편집할 객체를 선택하십시오.":                  "Choose an object with Object Selection (V) first.",
-	"%d. 버전 정보와 2.0.0": "%d. Version information and 2.0.0",
+	"%d. 버전 정보와 %s":    "%d. Version information and %s",
 	"객체 선택":            "Object Selection",
 	"객체 선택 (V)":        "Object Selection (V)",
 	"이동(&M)":           "Move(&M)",

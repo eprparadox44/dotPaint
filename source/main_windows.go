@@ -38,7 +38,7 @@ import (
 // Historical 1.2.38 regression marker retained for inherited source tests:
 // const appVersion = "1.2.38"
 // Release 1.2.39 regression marker: const appVersion = "1.2.40"
-const appVersion = "2.0.0"
+const appVersion = "2.0.1"
 
 // A1250: one summary per Shift hold, never one synchronous log write per repeat.
 var shiftPreviewAutorepeatsIgnored uint64
@@ -17112,6 +17112,11 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) (ret uintptr) {
 		} else {
 			logf("THEME preference saved on exit dark=%v", app.darkMode)
 		}
+		if err := saveRasterModePreference(app.rasterMode); err != nil {
+			logf("RASTER preference save on exit failed enabled=%v err=%v", app.rasterMode, err)
+		} else {
+			logf("RASTER preference saved on exit enabled=%v", app.rasterMode)
+		}
 		app.destroyCanvasTileBuffer()
 		app.destroyBackBuffer()
 		destroyToolCursors()
@@ -17182,6 +17187,14 @@ func main() {
 		logf("THEME preference loaded dark=%v", app.darkMode)
 	} else {
 		logf("THEME preference absent/invalid; using default dark=%v", app.darkMode)
+	}
+	if enabled, ok, rasterErr := loadRasterModePreference(); rasterErr != nil {
+		logf("RASTER preference load failed; using default enabled=%v err=%v", app.rasterMode, rasterErr)
+	} else if ok {
+		app.restoreStartupRasterMode(enabled)
+		logf("RASTER preference loaded enabled=%v", app.rasterMode)
+	} else {
+		logf("RASTER preference absent/invalid; using default enabled=%v", app.rasterMode)
 	}
 	logf("APP allocated canvas=%dx%d pix=%d", app.canvas.W, app.canvas.H, len(app.canvas.Pix))
 	logf("VECTOR_PREVIEW policy backend=CPU-DIRTY-REGION gpu=false reason=GDI-present-avoids-D3D-upload-readback")

@@ -77,6 +77,31 @@ func confirmEnableRasterMode(hwnd uintptr) bool {
 	return confirmRasterModeFallback(hwnd)
 }
 
+// restoreStartupRasterMode restores a *preference*, not a user drawing action.
+// This must be called on the new blank document, before opening any file.
+// Do not call enterRasterMode: it would show up as an extra Undo action.
+func (a *App) restoreStartupRasterMode(enabled bool) {
+	if !enabled {
+		return
+	} // fresh-document default is editable-object mode
+	a.keepObjectsBeforeRasterMode = a.keepObjects
+	a.keepObjects = false
+	a.rasterMode = true
+	// The single starting history snapshot must agree with the UI; otherwise
+	// Undo could unexpectedly restore the opposite mode on a fresh document.
+	a.resetHistory("시작")
+}
+
+// UI-initiated mode toggles persist immediately, just like the theme choice;
+// Windows shutdown also saves the effective mode after history navigation.
+func (a *App) saveRasterModePreferenceAfterToggle() {
+	if err := saveRasterModePreference(a.rasterMode); err != nil {
+		logf("RASTER preference save after toggle failed enabled=%v err=%v", a.rasterMode, err)
+	} else {
+		logf("RASTER preference saved after toggle enabled=%v", a.rasterMode)
+	}
+}
+
 // enterRasterMode has no confirmation UI; the caller MUST confirm first.
 // Raster mode is a reversible, named history step: the previous snapshot
 // restores the editable objects and their dynamic inversion on Ctrl+Z.
@@ -127,6 +152,7 @@ func (a *App) leaveRasterMode() {
 func (a *App) toggleRasterModeInteractive() {
 	if a.rasterMode {
 		a.leaveRasterMode()
+		a.saveRasterModePreferenceAfterToggle()
 		return
 	}
 	if !confirmEnableRasterMode(a.hwnd) {
@@ -134,6 +160,7 @@ func (a *App) toggleRasterModeInteractive() {
 		return
 	}
 	a.enterRasterMode()
+	a.saveRasterModePreferenceAfterToggle()
 }
 
 func (a *App) refreshRasterModeUI() {

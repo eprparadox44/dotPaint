@@ -68,7 +68,7 @@ func TestBeta2KoreanEnglishLightDarkDataMatrix(t *testing.T) {
 			return true
 		})
 	}
-	labels = append(labels, "객체 선택", "객체 선택 (V)", "%d. 버전 정보와 2.0.0")
+	labels = append(labels, "객체 선택", "객체 선택 (V)", "%d. 버전 정보와 %s")
 	for _, language := range []string{"ko", "en"} {
 		for theme := 0; theme < 2; theme++ {
 			t.Run(fmt.Sprintf("%s_theme%d", language, theme), func(t *testing.T) {

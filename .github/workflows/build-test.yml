@@ -1,4 +1,4 @@
-name: Build and test dotPaint 2.0.0
+name: Build and test dotPaint 2.0.1
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
           go-version: '1.23.2'
           cache: false
       - name: Require official version source
-        run: grep -qE '^const appVersion = "2[.]0[.]0"$' source/main_windows.go
+        run: grep -qE '^const appVersion = "2[.]0[.]1"$' source/main_windows.go
       - name: Run all Go tests
         run: go -C source test ./...
       - name: Run static analysis
@@ -31,19 +31,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go -C source build -buildvcs=false -trimpath -ldflags='-H=windowsgui -s -w -buildid=' -o ../dist/dotPaint_2.0.0_x64.exe .
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go -C source build -buildvcs=false -tags devlog -trimpath -ldflags='-H=windowsgui -buildid=' -o ../dist/dotPaint_2.0.0_DEVLOG_x64.exe .
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go -C source build -buildvcs=false -trimpath -ldflags='-H=windowsgui -s -w -buildid=' -o ../dist/dotPaint_2.0.1_x64.exe .
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go -C source build -buildvcs=false -tags devlog -trimpath -ldflags='-H=windowsgui -buildid=' -o ../dist/dotPaint_2.0.1_DEVLOG_x64.exe .
       - name: Verify release size and hashes
         run: |
           set -euo pipefail
-          bytes=$(stat -c%s dist/dotPaint_2.0.0_x64.exe)
+          bytes=$(stat -c%s dist/dotPaint_2.0.1_x64.exe)
           echo "Release size: $bytes bytes"
           test "$bytes" -le 10485760
           echo 'Diagnostic build has no size cap.'
           sha256sum dist/*.exe
       - uses: actions/upload-artifact@v4
         with:
-          name: dotPaint-v2.0.0-Windows-CI
+          name: dotPaint-v2.0.1-Windows-CI
           path: dist/*.exe
           if-no-files-found: error
           retention-days: 14
