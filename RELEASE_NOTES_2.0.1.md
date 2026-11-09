@@ -1,34 +1,34 @@
-# dotPaint 2.0.1 — Remember Raster Mode (Official Release)
+# dotPaint 2.0.1 — 래스터화 모드 설정 기억 (공식 릴리스)
 
-Based on the official 2.0.0 stable release, with all features and performance improvements preserved.
+공식 안정판 2.0.0을 기반으로 하며, 기존의 모든 기능과 성능 최적화 내용을 그대로 유지합니다.
 
-## Improvement
+## 개선 사항
 
-- Remember the last **Rasterization Mode** state across application restarts, similar to the light/dark theme preference.
-- Save per-user preference in `%APPDATA%\dotPaint\raster_mode.txt` (values: `on` / `off`).
-- Save on explicit UI changes and normal shutdown.
-- Restore the option on a fresh canvas without warning prompts, flattening, or creating an extra undo-history entry.
-- Continue to prompt before manually enabling rasterization and flattening existing objects.
-- Opening editable DOP projects still automatically disables raster mode to protect editable objects.
+- 라이트/다크 모드 설정과 마찬가지로 **마지막으로 선택한 래스터화 모드 상태를 기억**하여 프로그램을 다시 실행해도 유지합니다.
+- 사용자별 설정을 `%APPDATA%\dotPaint\raster_mode.txt` 파일에 저장합니다. (설정값: `on` / `off`)
+- 사용자가 래스터화 모드를 직접 변경하거나 프로그램을 정상 종료할 때 설정을 저장합니다.
+- 프로그램 실행 시 새로운 캔버스에 이전 설정을 자동으로 복원합니다. 이 과정에서는 확인창 표시, 객체 래스터화 또는 추가적인 실행 취소(Undo) 기록이 발생하지 않습니다.
+- 기존 객체가 있는 상태에서 사용자가 직접 래스터화 모드를 활성화하면, 이전과 마찬가지로 객체 병합에 대한 확인창을 표시합니다.
+- 편집 가능한 DOP 프로젝트를 열면 객체의 편집 가능 상태를 보호하기 위해 래스터화 모드를 자동으로 해제하는 기존 동작을 유지합니다.
 
-## About / License information
+## 프로그램 정보 및 라이선스 안내
 
-- The **About dotPaint** window now displays the program's **MIT License**, project copyright (**Copyright © 2026 지너드 · G.nerd / eprparadox44**), and a separate third-party assets/code notice.
-- Dedicated **MIT 라이선스 전문** and **제3자 자료 고지** buttons open the authoritative `LICENSE` and `THIRD_PARTY_NOTICES.md` documents on GitHub in the default browser.
-- The notice makes clear that MIT does not automatically relicense third-party images, fonts, or source dependencies.
-- The About window was enlarged to prevent the new lines from colliding with the close button, and the new controls retain the existing dark/light styling.
+- **dotPaint 정보** 창에 프로그램의 **MIT 라이선스**, 저작권 정보(**Copyright © 2026 지너드 · G.nerd / eprparadox44**), 제3자 이미지 및 코드에 대한 별도 안내를 추가했습니다.
+- **MIT 라이선스 전문** 및 **제3자 자료 고지** 버튼을 추가했습니다. 각 버튼을 클릭하면 기본 웹 브라우저에서 GitHub에 게시된 `LICENSE` 및 `THIRD_PARTY_NOTICES.md` 문서를 열 수 있습니다.
+- MIT 라이선스가 제3자의 이미지, 글꼴, 외부 코드 등에 자동으로 적용되는 것은 아니라는 점을 명시했습니다.
+- 추가된 안내 문구와 닫기 버튼이 겹치지 않도록 정보 창의 크기를 확장했으며, 새로 추가된 버튼에도 기존 라이트/다크 모드 디자인을 적용했습니다.
 
-## Korean / English About dialog localization
+## 프로그램 정보 창의 한국어·영어 지원
 
-- All About-dialog descriptive text, version/build label, MIT license summary, copyright credit, and third-party asset notice follow the application's saved Korean/English language preference.
-- The license and third-party notice buttons are localized as **MIT 라이선스 전문 / Full MIT License**, and **제3자 자료 고지 / Third-Party Notices**.
-- The About title and controls refresh immediately when switching languages while that dialog remains open. No need to close the About window or restart dotPaint.
-- Browser links, existing About content, the app's theme, and document state remain unchanged.
+- 프로그램 정보 창의 모든 설명 문구, 버전 및 빌드 정보, MIT 라이선스 안내, 저작권 표시, 제3자 자료 안내가 프로그램에 저장된 한국어·영어 설정에 따라 표시됩니다.
+- 라이선스 관련 버튼도 언어 설정에 따라 **MIT 라이선스 전문 / Full MIT License**, **제3자 자료 고지 / Third-Party Notices**로 전환됩니다.
+- 정보 창을 열어둔 상태에서 언어를 변경해도 창 제목과 각종 문구 및 버튼이 즉시 갱신됩니다. 정보 창을 닫거나 dotPaint를 다시 실행할 필요가 없습니다.
+- 기존 웹 브라우저 연결 기능, 정보 창의 기존 내용, 프로그램 테마 및 작업 중인 문서 상태는 변경되지 않습니다.
 
-## Validation
+## 이전 버전 릴리스 노트
 
-- New parsing and file read/write tests, including missing, corrupt, and repeated overwrite scenarios.
-- Windows x64 cross-compile and existing regression tests.
-- Standard executable <= 10 MiB; dev-log executable exempt.
+dotPaint 2.0.1은 2.0.0의 모든 기능을 유지하는 개선 업데이트입니다.
 
-The raster-mode persistence has already been confirmed in Windows by the user. The new About-dialog layout, language-switch rendering, and URL buttons still require a Windows GUI check. The public GitHub `v2.0.0` release is unchanged, and `v2.0.1` is published as the next stable release.
+**2.0.0에서 도입된 주요 기능과 변경 사항**은 아래 공식 릴리스 노트에서 확인할 수 있습니다.
+
+**[dotPaint 2.0.0 공식 릴리스 노트 보기](https://github.com/eprparadox44/dotPaint/releases/tag/v2.0.0)**

@@ -1,0 +1,35 @@
+name: Sync dotPaint v2.0.1 Korean Release Notes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'RELEASE_NOTES_2.0.1.md'
+      - '.github/workflows/sync-v2.0.1-release-notes.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-release-description:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update existing v2.0.1 title and notes (preserve assets)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view v2.0.1 --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release edit v2.0.1 --repo "$GITHUB_REPOSITORY" \
+            --title 'dotPaint 2.0.1 — 래스터화 모드 설정 기억 (공식 릴리스)' \
+            --notes-file RELEASE_NOTES_2.0.1.md
+      - name: Confirm release notes match source file
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view v2.0.1 --repo "$GITHUB_REPOSITORY" --json body --jq .body > /tmp/github-v2.0.1-release-notes.md
+          diff -u RELEASE_NOTES_2.0.1.md /tmp/github-v2.0.1-release-notes.md
