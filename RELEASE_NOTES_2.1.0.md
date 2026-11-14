@@ -2,25 +2,25 @@
 
 ## English
 
-dotPaint 2.1.0 builds on the official [v2.0.1 release](https://github.com/eprparadox44/dotPaint/releases/tag/v2.0.1), which introduced persistent rasterization-mode preferences and bilingual license information. This release focuses on the drawing workflow, animation, image-format support, color adjustments, and UI refinements while retaining the editable-object and science-visualization tools.
+dotPaint 2.1.0 builds on the official [v2.0.1 release](https://github.com/eprparadox44/dotPaint/releases/tag/v2.0.1), which introduced persistent rasterization-mode preferences and bilingual license information. This release improves drawing tools, animation editing, image-format support, color adjustments, and the interface while retaining the existing editable-object and science-visualization features.
 
 ### What's new since v2.0.1
 
-- **Animation workflow:** GIF/ANI frame editing, a frame-list window, and synchronized Show/Hide controls in both the Animation and View/Window menus. Closing the panel also updates both menu checkmarks.
-- **Image and cursor formats:** Extended file support for ICO, CUR, PCX, TGA, WebP and TIFF, alongside existing formats. Icon/cursor tools include multi-size handling and cursor hotspot editing.
-- **Smudge tool:** Soft circular brush with adjustable size (1–40 px) and strength (1–100), defaulting to a gentler **30%** strength. A circle-only brush cursor and dedicated light/dark toolbox icons are provided.
-- **Brightness / Contrast / Saturation:** Three adjustments in that order, each ranging from **−100 to +100**. Sliders and numeric input fields stay synchronized. Preview uses the original pixels; Cancel restores the image and OK creates one Undo step. Current implementation targets RGB raster pixels and respects selection masks and transparency without automatically rasterizing editable objects.
-- **Improved curve anti-aliasing:** Subpixel-aware Bézier rendering improves smoothness, especially at small stroke widths; the original pixel-sharp mode remains available when AA is disabled.
-- **New default RGB palette:** **28 standard colors plus 16 editable custom colors**, arranged with brighter pastels for manual anti-aliasing and vivid colors for drawing. Existing indexed/DejaVu palettes and palette values saved in DOP projects are preserved.
-- **UI and workflow refinements:** Renamed View to **View/Window**; improved recent-file refresh across multiple windows; updated app/toolbox icons and selection cursors; removed the experimental label from the application title.
-- **History and resource updates:** Up to **100 Undo steps**, subject to a shared **2 GiB** instance history budget. The embedded Earth texture retains its **2048×1024** resolution with 7-bit RGB precision, reducing its WebP asset size without downscaling.
+- **Animation editing:** Added GIF/ANI frame editing and a frame-list window. The same window can be shown or hidden from the Animation and View/Window menus; both menu checkmarks stay synchronized with the window's close-button state.
+- **Image and cursor format support:** Expanded import and export support for ICO, CUR, PCX, TGA, WebP, and TIFF in addition to the existing formats. Added multi-size icon/cursor handling and cursor hotspot editing.
+- **Smudge tool:** Added a smudge tool with adjustable size (**1–40 px**) and strength (**1–100%**). The default strength is **30%**.
+- **Brightness, contrast, and saturation:** Adjust these three settings, in that order, from **−100 to +100**. Each slider is synchronized with the numeric input field on its right. The feature supports real-time preview based on the original image, full restoration on Cancel, and a single Undo step on OK. It currently applies to RGB raster pixels, preserves selection masks and transparency, and does not automatically rasterize editable objects.
+- **Curve anti-aliasing fix:** Fixed curve anti-aliasing so it now actually works; previously, the UI option existed but the feature did not function.
+- **New default RGB palette:** Reorganized the default palette around brighter pastel shades and vivid primary colors.
+- **Interface and workflow refinement:** Renamed the top-level **View** menu to **View/Window**.
+- **History and resource improvements:** Supports up to **100 Undo steps** within a shared **2 GiB** memory budget per application instance. The embedded Earth texture retains its **2048×1024** resolution while using 7-bit RGB precision to reduce its WebP file size.
 
 ### Downloads and notes
 
 - `dotPaint_2.1.0_x64.exe` — standalone Windows x64 standard edition; no installer required.
 - The original project code is MIT licensed. Third-party assets may have separate terms; see `THIRD_PARTY_NOTICES.md`.
 - The developer diagnostic (`DEVLOG`) build is not part of the public release.
-- Automated source tests and Windows x64 cross-compilation help validate this build; these do not replace real Windows GUI/GPU interaction checks.
+- Automated source tests and Windows x64 cross-compilation help validate this build; these do not fully replace real Windows GUI/GPU interaction checks.
 
 ## 한국어
 
