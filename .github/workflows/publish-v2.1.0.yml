@@ -1,0 +1,71 @@
+name: Publish dotPaint v2.1.0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'source/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate-build-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Go 1.23.2
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Guard official release sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -qE '^const appVersion = "2[.]1[.]0"$' source/main_windows.go
+          test -s RELEASE_NOTES_2.1.0.md
+          test -s LICENSE
+          test -s THIRD_PARTY_NOTICES.md
+      - name: Run complete Go regression tests
+        run: go -C source test -timeout 12m ./...
+      - name: Go static analysis
+        run: go -C source vet ./...
+      - name: Build standalone Windows x64 executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go -C source build -buildvcs=false -trimpath -ldflags='-H=windowsgui -s -w' -o ../dist/dotPaint_2.1.0_x64.exe .
+      - name: Verify file size and exact release binary hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(head -c 2 dist/dotPaint_2.1.0_x64.exe)" = MZ
+          size=$(stat -c%s dist/dotPaint_2.1.0_x64.exe)
+          echo "dotPaint 2.1.0 x64 size: $size bytes"
+          test "$size" -le 10485760
+          echo '4f36b25ec41b88c8ed036c7bdeb27b59c75093b9566b415a539af99f672bf14a  dist/dotPaint_2.1.0_x64.exe' | sha256sum -c -
+      - name: Bundle full source with licenses and bilingual release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip -q -r -X dist/dotPaint_2.1.0_FULL_SOURCE.zip source README.md RELEASE_NOTES_2.1.0.md LICENSE THIRD_PARTY_NOTICES.md
+          unzip -tqq dist/dotPaint_2.1.0_FULL_SOURCE.zip
+          sha256sum dist/*
+      - name: Publish official stable v2.1.0
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view v2.1.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'v2.1.0 already exists; refusing to replace existing release or assets.'
+            exit 0
+          fi
+          gh release create v2.1.0 dist/dotPaint_2.1.0_x64.exe dist/dotPaint_2.1.0_FULL_SOURCE.zip \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title 'dotPaint 2.1.0 — Drawing, Animation and Color Tools / 그리기·애니메이션·색상 도구' \
+            --notes-file RELEASE_NOTES_2.1.0.md --latest
